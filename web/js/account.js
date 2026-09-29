@@ -30,7 +30,7 @@ export function Login({ openSignup, onDone }) {
   };
 
   return html`<div class="gate"><form class="gate-box" onSubmit=${submit}>
-    <h1>净值簿</h1><div class="en">FUND LEDGER</div>
+    <h1>基金记账簿</h1><div class="en">FUND LEDGER</div>
     ${openSignup
       ? html`<div style=${{ margin: '18px 0 4px' }}><${Seg} options=${[{ value: 'login', label: '登录' }, { value: 'signup', label: '注册新账户' }]}
           value=${mode} onChange=${(v) => { setMode(v); setErr(''); }} /></div>`

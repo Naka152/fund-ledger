@@ -1,4 +1,4 @@
-"""净值簿 HTTP 服务：静态页面 + JSON API。多用户，用户名 + 密码登录。
+"""基金记账簿 HTTP 服务：静态页面 + JSON API。多用户，用户名 + 密码登录。
 
   python3 server/main.py                              启动（HOST / PORT / FL_DATA；FL_AUTH=off 仅供本机调试）
   python3 server/main.py --add-user 名字 [--admin]    新建账户，密码从标准输入读取
@@ -508,7 +508,7 @@ def main():
     recorder.start(() if AUTH else ('local',))
     srv = ThreadingHTTPServer((HOST, PORT), Handler)
     srv.daemon_threads = True
-    print(f'净值簿 listening on http://{HOST}:{PORT}  auth={"on" if AUTH else "off"}  '
+    print(f'基金记账簿 listening on http://{HOST}:{PORT}  auth={"on" if AUTH else "off"}  '
           f'users={len(auth.list_users())}  data={DATA}', flush=True)
     srv.serve_forever()
 

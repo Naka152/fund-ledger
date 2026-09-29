@@ -1,5 +1,5 @@
 [Unit]
-Description=净值簿 基金实时估值
+Description=基金记账簿 基金实时估值
 After=network-online.target
 Wants=network-online.target
 

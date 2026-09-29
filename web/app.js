@@ -116,7 +116,7 @@ function useClock() {
 function Masthead({ data, at, busy, err, reload, onSettings, user }) {
   const now = useClock();
   return html`<header class="mast">
-    <div class="brand"><h1>净值簿</h1><small>FUND LEDGER</small></div>
+    <div class="brand"><h1>基金记账簿</h1><small>FUND LEDGER</small></div>
     <div class="mast-meta">
       <span class="clock">${ymd(now)} ${weekday(now)} ${hms(now)}</span>
       <span class="mkts">
@@ -384,7 +384,7 @@ function Main({ auth, user }) {
     <footer class="foot">
       <p>估算仅供参考，一切以基金公司公布的净值为准。行情来自天天基金、东方财富、腾讯财经与 Yahoo Finance，
       港股行情可能有延迟；罗素、MSCI 等指数用跟踪 ETF 代理。</p>
-      <span>净值簿 · ${today}</span>
+      <span>基金记账簿 · ${today}</span>
     </footer>
     ${route.name === 'add' ? html`<${AddFund} onClose=${route.close} onAdded=${() => { reload(); route.close(); }} />` : null}
     ${route.name === 'f' && data

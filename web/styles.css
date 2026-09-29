@@ -1,4 +1,4 @@
-/* 净值簿 —— 账簿式排版：纸色底、墨色字、细线分隔、直角、无渐变无阴影。 */
+/* 基金记账簿 —— 账簿式排版：纸色底、墨色字、细线分隔、直角、无渐变无阴影。 */
 
 @font-face { font-family: 'Plex Mono'; src: url(/fonts/plex-mono-400.woff2) format('woff2'); font-weight: 400; font-display: swap; }
 @font-face { font-family: 'Plex Mono'; src: url(/fonts/plex-mono-500.woff2) format('woff2'); font-weight: 500; font-display: swap; }

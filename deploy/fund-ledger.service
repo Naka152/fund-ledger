@@ -1,0 +1,25 @@
+[Unit]
+Description=净值簿 基金实时估值
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=fundledger
+Group=fundledger
+WorkingDirectory=/opt/fund-ledger
+Environment=HOST=127.0.0.1
+Environment=PORT=8766
+Environment=TZ=Asia/Shanghai
+Environment=FL_DATA=/opt/fund-ledger/data
+ExecStart=/usr/bin/python3 /opt/fund-ledger/server/main.py
+Restart=always
+RestartSec=5
+MemoryMax=200M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/fund-ledger/data
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,6 @@
+# 追加到 /etc/caddy/Caddyfile，把 fund.example.com 换成你的域名。
+# 没有域名可以用免费的 sslip.io：fund.1-2-3-4.sslip.io 会解析到 1.2.3.4（把点换成横杠）。
+fund.example.com {
+	encode gzip
+	reverse_proxy 127.0.0.1:8766
+}

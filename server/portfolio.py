@@ -28,6 +28,10 @@ _estlog = read_json(ESTLOG, {}) or {}
 _estlog_saved = [time.time()]
 FREQS = ('daily', 'weekly', 'biweekly', 'monthly')
 DCA_PARAMS = ('amount', 'feeRate', 'freq', 'weekday', 'monthday')
+DEFAULT_GROUP = 'default'
+GROUP_ID_RE = re.compile(r'default|g[0-9a-f]{8}')
+MAX_GROUPS = 30
+MAX_FAVS = 120
 
 
 def r2(x):
@@ -47,7 +51,17 @@ def load(uid):
     st.setdefault('holdings', [])
     st.setdefault('watch', list(catalog.DEFAULT_WATCH))
     st.setdefault('prefs', {})
+    st.setdefault('favs', [])
+    groups = [g for g in st.get('groups') or [] if g.get('id')]
+    if not any(g['id'] == DEFAULT_GROUP for g in groups):
+        groups.insert(0, {'id': DEFAULT_GROUP, 'name': '默认分组', 'inTotal': True})
+    st['groups'] = groups
     return st
+
+
+def group_of(st, h):
+    gid = h.get('group') or DEFAULT_GROUP
+    return gid if any(g['id'] == gid for g in st['groups']) else DEFAULT_GROUP
 
 
 def save(uid, st):
@@ -111,6 +125,23 @@ def dca_default_start(snap_at, confirm_days):
     return t
 
 
+def norm_est(e):
+    e = e or {}
+    mode = e.get('mode') or 'auto'
+    if mode not in estimate.MODES:
+        raise ValueError('估算方式不对')
+    link = e.get('link') or None
+    if mode == 'link' and not (link and link.get('id')):
+        raise ValueError('请选择要链接的指数或标的')
+    beta = e.get('beta')
+    return {
+        'mode': mode,
+        'link': {'id': str(link['id'])[:40], 'name': str(link.get('name') or link['id'])[:60]} if link else None,
+        'beta': round(_num(beta, 0.05, 2, '仓位系数'), 4) if beta not in (None, '') else None,
+        'fx': e.get('fx', True) is not False,
+    }
+
+
 def normalize_holding(d, old=None):
     h = dict(old or {})
     code = str(d.get('code', h.get('code', ''))).strip()
@@ -133,20 +164,10 @@ def normalize_holding(d, old=None):
     if 'snapshotNavDate' in d:
         h['snapshotNavDate'] = _date(d['snapshotNavDate'], '快照净值日')
     if 'est' in d:
-        e = d['est'] or {}
-        mode = e.get('mode') or 'auto'
-        if mode not in estimate.MODES:
-            raise ValueError('估算方式不对')
-        link = e.get('link') or None
-        if mode == 'link' and not (link and link.get('id')):
-            raise ValueError('请选择要链接的指数或标的')
-        beta = e.get('beta')
-        h['est'] = {
-            'mode': mode,
-            'link': {'id': str(link['id'])[:40], 'name': str(link.get('name') or link['id'])[:60]} if link else None,
-            'beta': round(_num(beta, 0.05, 2, '仓位系数'), 4) if beta not in (None, '') else None,
-            'fx': e.get('fx', True) is not False,
-        }
+        h['est'] = norm_est(d['est'])
+    if 'group' in d:
+        gid = str(d['group'] or DEFAULT_GROUP)
+        h['group'] = gid if GROUP_ID_RE.fullmatch(gid) else DEFAULT_GROUP
     if 'dca' in d:
         v = d['dca']
         if not v:
@@ -185,6 +206,7 @@ def normalize_holding(d, old=None):
         h['note'] = str(d['note'] or '')[:200]
     h.setdefault('est', {'mode': 'auto', 'link': None, 'beta': None, 'fx': True})
     h.setdefault('dca', None)
+    h.setdefault('group', DEFAULT_GROUP)
     return h
 
 
@@ -202,6 +224,7 @@ def create_holding(uid, d):
     h['createdAt'] = now_cn().isoformat(timespec='seconds')
 
     def add(st):
+        h['group'] = group_of(st, h)
         st['holdings'].append(h)
         return h
     return mutate(uid, add)
@@ -220,6 +243,7 @@ def update_holding(uid, hid, d):
                     start = dca_default_start(datetime.fromisoformat(nh['snapshotAt']), meta.get('confirmDays')).isoformat()
                     nh['dca']['start'] = start
                     nh['dca']['frozen'] = [e for e in nh['dca'].get('frozen') or [] if e['date'] >= start]
+                nh['group'] = group_of(st, nh)
                 nh['updatedAt'] = now_cn().isoformat(timespec='seconds')
                 st['holdings'][i] = nh
                 return nh
@@ -241,6 +265,91 @@ def reorder(uid, ids):
     def ro(st):
         pos = {hid: i for i, hid in enumerate(ids)}
         st['holdings'].sort(key=lambda h: pos.get(h['id'], 1e9))
+        return True
+    return mutate(uid, ro)
+
+
+def set_groups(uid, groups):
+    """整体保存分组：改名、排序、是否计入总资产。删掉的分组里的持仓移到默认分组，默认分组不能删。"""
+    clean, names, ids = [], set(), set()
+    for g in (groups or [])[:MAX_GROUPS]:
+        name = str(g.get('name') or '').strip()[:16]
+        if not name:
+            raise ValueError('分组名称不能为空')
+        if name in names:
+            raise ValueError(f'分组「{name}」重复了')
+        gid = str(g.get('id') or '')
+        if not GROUP_ID_RE.fullmatch(gid) or gid in ids:
+            gid = 'g' + secrets.token_hex(4)
+        names.add(name)
+        ids.add(gid)
+        clean.append({'id': gid, 'name': name, 'inTotal': g.get('inTotal', True) is not False})
+    if DEFAULT_GROUP not in ids:
+        clean.insert(0, {'id': DEFAULT_GROUP, 'name': '默认分组' if '默认分组' not in names else '默认分组 ', 'inTotal': True})
+
+    def sg(st):
+        keep = {g['id'] for g in clean}
+        for h in st['holdings']:
+            if h.get('group', DEFAULT_GROUP) not in keep:
+                h['group'] = DEFAULT_GROUP
+        st['groups'] = clean
+        return clean
+    return mutate(uid, sg)
+
+
+def _check_code(code):
+    code = str(code or '').strip()
+    if not re.fullmatch(r'\d{6}', code):
+        raise ValueError('基金代码应为 6 位数字')
+    return code
+
+
+def add_fav(uid, code):
+    code = _check_code(code)
+    meta = fundsrc.meta(code)
+
+    def af(st):
+        for f in st['favs']:
+            if f['code'] == code:
+                return f
+        if len(st['favs']) >= MAX_FAVS:
+            raise ValueError(f'自选最多 {MAX_FAVS} 只')
+        f = {'code': code, 'name': meta['name'], 'est': {'mode': 'auto', 'link': None, 'beta': None, 'fx': True},
+             'addedAt': now_cn().isoformat(timespec='seconds')}
+        st['favs'].append(f)
+        return f
+    return mutate(uid, af)
+
+
+def update_fav(uid, code, d):
+    code = _check_code(code)
+
+    def uf(st):
+        for f in st['favs']:
+            if f['code'] == code:
+                if 'est' in d:
+                    f['est'] = norm_est(d['est'])
+                return f
+        raise KeyError('不在自选里')
+    return mutate(uid, uf)
+
+
+def delete_fav(uid, code):
+    code = _check_code(code)
+
+    def df(st):
+        n = len(st['favs'])
+        st['favs'] = [f for f in st['favs'] if f['code'] != code]
+        if len(st['favs']) == n:
+            raise KeyError('不在自选里')
+        return True
+    return mutate(uid, df)
+
+
+def reorder_favs(uid, codes):
+    def ro(st):
+        pos = {c: i for i, c in enumerate(codes)}
+        st['favs'].sort(key=lambda f: pos.get(f['code'], 1e9))
         return True
     return mutate(uid, ro)
 
@@ -394,51 +503,9 @@ def compute(uid):
     return cache.get(('portfolio', uid), 3, lambda: _compute(uid))
 
 
-def _compute(uid):
-    st = load(uid)
-    now = now_cn()
-    hs = st['holdings']
-    codes = list(dict.fromkeys(h['code'] for h in hs))
-    lat = fundsrc.latest(codes) if codes else {}
-    metas = dict(zip(codes, pmap(lambda c: _safe(fundsrc.meta, c), codes)))
-    navss = dict(zip(codes, pmap(lambda c: _safe(fundsrc.navs, c, (lat.get(c) or {}).get('date')), codes)))
-    for c in codes:
-        rows = navss.get(c) or []
-        L = lat.get(c)
-        if L and (not rows or rows[-1][0] < L['date']):
-            rows = rows + [[L['date'], L['nav'], L.get('acc'), L.get('pct')]]
-        navss[c] = rows
-
-    ids = set(st.get('watch') or []) | {'124.HSTECH', '100.NDX100'}
-    for h in hs:
-        ids |= set(estimate.source_ids(h, metas.get(h['code']) or {}))
-    qmap = market.quotes(ids)
-
-    # 预取需要日 K 的标的（QDII 净值滞后、假期后等）与外币中间价
-    need_k, ccys = set(), set()
-    for h in hs:
-        rows = navss.get(h['code'])
-        if not rows:
-            continue
-        d0 = rows[-1][0]
-        for i in estimate.source_ids(h, metas.get(h['code']) or {}):
-            q = qmap.get(i)
-            if estimate.needs_kline(q, d0):
-                need_k.add(i)
-            if q and market.market_of(i)[1] != 'CNY' and q.get('date') and q['date'] > d0:
-                ccys.add(market.market_of(i)[1])
-    jobs = [(market.kline, i) for i in need_k] + [(market.fx_series, c) for c in ccys]
-    if jobs:
-        pmap(lambda j: _safe(j[0], j[1]), jobs)
-
-    rows_out = []
-    for h in hs:
-        rows_out.append(_holding_row(h, metas.get(h['code']), navss.get(h['code']) or [], qmap, now))
-    _flush_estlog()
-
+def _sum_rows(rows):
     tot = {k: 0.0 for k in ('value', 'estValue', 'cost', 'pnl', 'estPnl', 'dayPnl', 'estDayPnl', 'pending')}
-    market.flush_closes()
-    for r in rows_out:
+    for r in rows:
         if r.get('error') and r.get('value') is None:
             continue
         for k in tot:
@@ -452,6 +519,63 @@ def _compute(uid):
     tot['estDayPct'] = tot['estDayPnl'] / base * 100 if base else None
     prev_base = base - tot['dayPnl']
     tot['dayPct'] = tot['dayPnl'] / prev_base * 100 if prev_base else None
+    return tot
+
+
+def _compute(uid):
+    st = load(uid)
+    now = now_cn()
+    hs, favs = st['holdings'], st['favs']
+    items = hs + favs  # 估算只需要 code 与 est，持仓和自选共用
+    codes = list(dict.fromkeys(x['code'] for x in items))
+    lat = fundsrc.latest(codes) if codes else {}
+    metas = dict(zip(codes, pmap(lambda c: _safe(fundsrc.meta, c), codes)))
+    navss = dict(zip(codes, pmap(lambda c: _safe(fundsrc.navs, c, (lat.get(c) or {}).get('date')), codes)))
+    for c in codes:
+        rows = navss.get(c) or []
+        L = lat.get(c)
+        if L and (not rows or rows[-1][0] < L['date']):
+            rows = rows + [[L['date'], L['nav'], L.get('acc'), L.get('pct')]]
+        navss[c] = rows
+
+    ids = set(st.get('watch') or []) | {'124.HSTECH', '100.NDX100'}
+    for x in items:
+        ids |= set(estimate.source_ids(x, metas.get(x['code']) or {}))
+    qmap = market.quotes(ids)
+
+    # 预取需要日 K 的标的（QDII 净值滞后、假期后等）与外币中间价
+    need_k, ccys = set(), set()
+    for x in items:
+        rows = navss.get(x['code'])
+        if not rows:
+            continue
+        d0 = rows[-1][0]
+        for i in estimate.source_ids(x, metas.get(x['code']) or {}):
+            q = qmap.get(i)
+            if estimate.needs_kline(q, d0):
+                need_k.add(i)
+            if q and market.market_of(i)[1] != 'CNY' and q.get('date') and q['date'] > d0:
+                ccys.add(market.market_of(i)[1])
+    jobs = [(market.kline, i) for i in need_k] + [(market.fx_series, c) for c in ccys]
+    if jobs:
+        pmap(lambda j: _safe(j[0], j[1]), jobs)
+
+    rows_out = []
+    for h in hs:
+        r = _holding_row(h, metas.get(h['code']), navss.get(h['code']) or [], qmap, now)
+        r['group'] = group_of(st, h)
+        rows_out.append(r)
+    fav_rows = [_fav_row(f, metas.get(f['code']), navss.get(f['code']) or [], qmap, now) for f in favs]
+    _flush_estlog()
+    market.flush_closes()
+
+    in_total = {g['id'] for g in st['groups'] if g.get('inTotal', True)}
+    tot = _sum_rows([r for r in rows_out if r['group'] in in_total])
+    groups = []
+    for g in st['groups']:
+        mine = [r for r in rows_out if r['group'] == g['id']]
+        groups.append({'id': g['id'], 'name': g['name'], 'inTotal': g.get('inTotal', True),
+                       'count': len(mine), 'totals': _sum_rows(mine)})
 
     qd = {k: (qmap.get(i) or {}).get('date') for k, i in (('hk', '124.HSTECH'), ('us', '100.NDX100'))}
     qd = {k: s2d(v) for k, v in qd.items() if v}
@@ -463,8 +587,41 @@ def _compute(uid):
                       'date': (q or {}).get('date'), 'ts': (q or {}).get('ts')})
     return {
         'now': now.isoformat(timespec='seconds'), 'markets': tradecal.market_status(now, qd),
-        'holdings': rows_out, 'totals': tot, 'watch': watch, 'prefs': st.get('prefs') or {},
+        'holdings': rows_out, 'totals': tot, 'groups': groups, 'favs': fav_rows,
+        'watch': watch, 'prefs': st.get('prefs') or {},
     }
+
+
+def _period_pct(navs, n):
+    """最近 n 个净值日的涨跌（用日涨幅连乘，分红不会造成跳空）。"""
+    acc, k = 1.0, 0
+    for r in reversed(navs):
+        if k >= n:
+            break
+        if r[3] is not None:
+            acc *= 1 + r[3] / 100
+            k += 1
+    return (acc - 1) * 100 if k else None
+
+
+def _fav_row(f, meta, navs, qmap, now):
+    meta = meta or {}
+    row = {'code': f['code'], 'name': meta.get('name') or f.get('name') or f['code'], 'kind': meta.get('kind'),
+           'type': meta.get('type'), 'isQDII': meta.get('isQDII'), 'estCfg': f.get('est'),
+           'addedAt': f.get('addedAt')}
+    if not navs:
+        row['error'] = '暂时取不到净值'
+        return row
+    d0, nav0 = navs[-1][0], navs[-1][1]
+    est = estimate.estimate(f, meta, nav0, d0, qmap)
+    estimate.schedule_fit(f, meta, navs)
+    row.update({
+        'nav': nav0, 'navDate': d0, 'navPct': navs[-1][3], 'est': est,
+        'lastEst': _log_estimate(f['code'], est, d0, navs),
+        'm1': _period_pct(navs, 21), 'm3': _period_pct(navs, 63), 'y1': _period_pct(navs, 250),
+        'spark': [r[1] for r in navs[-64:]],
+    })
+    return row
 
 
 def _holding_row(h, meta, navs, qmap, now):

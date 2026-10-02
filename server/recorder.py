@@ -47,10 +47,16 @@ def record(uid, res, now):
             old = read_json(os.path.join(_dir(uid), f'{d}.json'), {}) or {}
             day = _days[uid] = {'date': d, 'points': old.get('points') or [], 'dirty': 0}
         t = res['totals']
+        codes = {}
+        for r in res['holdings'] + res.get('favs', []):  # 每只基金的估算涨跌（持仓与自选共用，按代码）
+            e = r.get('est') or {}
+            if e.get('live') and e.get('estPct') is not None:
+                codes[r['code']] = round(e['estPct'], 3)
         day['points'].append({
             't': int(now.timestamp()), 'v': round(t['estValue'], 2), 'b': round(t['value'], 2),
-            'h': {r['id']: round(r['est']['estPct'], 3) for r in res['holdings']
-                  if r.get('est') and r['est'].get('live') and r['est'].get('estPct') is not None},
+            'g': {g['id']: [round(g['totals']['estValue'], 2), round(g['totals']['value'], 2)]
+                  for g in res.get('groups', []) if g['count']},
+            'c': codes,
         })
         if not day['dirty']:
             day['dirty'] = time.time()
@@ -86,7 +92,8 @@ def _loop():
         try:
             if any(m['state'] == 'open' for m in market_status(now)):
                 for uid in _uids():
-                    if portfolio.load(uid)['holdings']:
+                    st = portfolio.load(uid)
+                    if st['holdings'] or st['favs']:
                         res = portfolio.compute(uid)
                         if any(m['state'] == 'open' for m in res['markets']):
                             record(uid, res, now)

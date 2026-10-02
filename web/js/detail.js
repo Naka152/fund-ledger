@@ -30,13 +30,17 @@ function KeyFigures({ row }) {
       <div class="s">最新一日 <${Num} v=${row.dayPnl} sign color /></div></div>
     <div><div class="k">投入成本</div><div class="v"><${Num} v=${row.cost} /></div>
       <div class="s">${row.pending > 0 ? `在途 ${money(row.pending)}` : '不含在途'}</div></div>
-    <div><div class="k">支付宝快照</div><div class="v" style=${{ fontSize: '14px' }}>${(row.snapshotAt || '').slice(0, 16).replace('T', ' ')}</div>
+    <div><div class="k">持仓快照</div><div class="v" style=${{ fontSize: '14px' }}>${(row.snapshotAt || '').slice(0, 16).replace('T', ' ')}</div>
       <div class="s">对应 ${md(row.snapshotNavDate)} 净值</div></div>
   </div>`;
 }
 
+// 盘中估算点：新记录按基金代码存（c），旧记录按持仓 id 存（h）
+export const fundPoint = (p, code, id) => p.c?.[code] ?? (id ? p.h?.[id] : undefined);
+
 function Overview({ row, detail, intraday, ledger }) {
-  const pts = (intraday || []).filter((p) => p.h && p.h[row.id] != null);
+  const val = (p) => fundPoint(p, row.code, row.id);
+  const pts = (intraday || []).filter((p) => val(p) != null);
   const buys = (ledger || []).filter((e) => e.status === 'done').map((e) => e.navDate);
   const le = row.lastEst;
   return html`
@@ -46,11 +50,11 @@ function Overview({ row, detail, intraday, ledger }) {
       : null}
     <div class="block">
       <div class="block-title"><h4>今日估算走势</h4><span class="muted small">${estLabel(row.est)}</span></div>
-      <${IntradayChart} points=${pts} value=${(p) => p.h[row.id]} format="pct" height=${120}
+      <${IntradayChart} points=${pts} value=${val} format="pct" height=${120}
         empty="交易时段内每分钟记录一次，开盘后这里会画出估算涨跌" />
     </div>
     <div class="block">
-      <div class="block-title"><h4>净值走势</h4><span class="muted small">虚线为持仓成本${buys.length ? '，黄色方块为定投' : ''}</span></div>
+      <div class="block-title"><h4>净值走势</h4><span class="muted small">${row.costPrice ? '虚线为持仓成本' : ''}${buys.length ? '，黄色方块为定投' : ''}</span></div>
       ${detail ? html`<${NavChart} navs=${detail.navs} cost=${row.costPrice} buys=${buys} />` : html`<${Loading} />`}
     </div>
     ${detail
@@ -84,7 +88,8 @@ function EstimateTab({ row, detail, onChanged }) {
     const d = JSON.parse(draft);
     if (d.mode === 'link' && !d.link) return;
     setBt(null);
-    const qs = new URLSearchParams({ hid: row.id, mode: d.mode, fx: d.fx ? '1' : '0' });
+    const qs = new URLSearchParams({ mode: d.mode, fx: d.fx ? '1' : '0' });
+    if (row.id) qs.set('hid', row.id);
     if (d.link) qs.set('link', d.link);
     if (d.beta) qs.set('beta', d.beta);
     let alive = true;
@@ -99,7 +104,7 @@ function EstimateTab({ row, detail, onChanged }) {
   const save = async () => {
     setBusy(true);
     try {
-      await api('/holdings/' + row.id, { method: 'PATCH', body: { est: { mode, link: mode === 'link' ? link : null, beta: beta === '' ? null : Number(beta), fx } } });
+      await api(row.id ? '/holdings/' + row.id : '/favs/' + row.code, { method: 'PATCH', body: { est: { mode, link: mode === 'link' ? link : null, beta: beta === '' ? null : Number(beta), fx } } });
       toast('估算方式已保存');
       onChanged();
     } catch (err) {
@@ -235,7 +240,7 @@ function DcaTab({ row, detail, ledger, reloadLedger, onChanged }) {
       <div class="block-title"><h4>定投计划</h4>${c ? html`<${Toggle} on=${on} onChange=${setOn}>${on ? '执行中' : '已暂停'}</${Toggle}>` : null}</div>
       <${DcaFields} v=${v} set=${set} meta=${meta} navNow=${row.nav} />
       <div class="row2">
-        <${Field} label="从哪天开始计入" hint=${`默认 ${md(row.dcaSuggestStart)}：快照时支付宝份额里还没有这笔及之后的扣款`}>
+        <${Field} label="从哪天开始计入" hint=${`默认 ${md(row.dcaSuggestStart)}：快照时平台份额里还没有这笔及之后的扣款`}>
           <input class="input" type="date" value=${v.start} onInput=${(e) => set({ start: e.target.value })} />
         </${Field}>
         <${Field} label="结束日期" hint="可不填">
@@ -301,7 +306,7 @@ function TopTab({ row, detail }) {
   </div>`;
 }
 
-function EditTab({ row, detail, onChanged, onDeleted }) {
+function EditTab({ row, detail, groups, onChanged, onDeleted }) {
   const [armed, setArmed] = useState(false);
   useEffect(() => {
     if (!armed) return;
@@ -326,17 +331,18 @@ function EditTab({ row, detail, onChanged, onDeleted }) {
   };
   return html`
     <div class="block note">
-      买卖之后，照着支付宝最新的份额和成本价重新录入即可。快照时间会更新为现在，
+      买卖之后，照着平台上最新的份额和成本价重新录入即可。快照时间会更新为现在，
       ${row.dcaCfg ? '定投会从新快照之后的第一笔扣款重新开始累计。' : ''}
     </div>
-    <${HoldingForm} detail=${detail} initial=${{ shares: row.snapShares, cost: row.snapCost }} submitLabel="用支付宝最新数据更新" onSubmit=${save} />
+    <${HoldingForm} detail=${detail} initial=${{ shares: row.snapShares, cost: row.snapCost, group: row.group }} groups=${groups}
+      submitLabel="用最新数据更新" onSubmit=${save} />
     <div class="block">
       <div class="block-title"><h4>删除持仓</h4></div>
       <button class="btn danger" onClick=${del}>${armed ? '再点一次确认删除' : '删除这只基金'}</button>
     </div>`;
 }
 
-export function FundDetail({ row, intraday, tab: initialTab, onClose, onChanged, onDeleted }) {
+export function FundDetail({ row, intraday, tab: initialTab, onClose, onChanged, onDeleted, groups, isFav, onToggleFav }) {
   const [tab, setTab] = useState(TABS.some((t) => t.value === initialTab) ? initialTab : 'overview');
   const [detail, setDetail] = useState(null);
   const [err, setErr] = useState(null);
@@ -347,8 +353,11 @@ export function FundDetail({ row, intraday, tab: initialTab, onClose, onChanged,
     if (row.dcaCfg) loadLedger();
     else setLedger([]);
   }, [row.code]);
+  const gname = (groups || []).find((g) => g.id === row.group)?.name;
   const sub = html`<span class="num">${row.code}</span>${kindTag(row) ? html`<span class="tag">${kindTag(row)}</span>` : null}
-    <span>${row.type || ''}</span>${detail?.meta?.buyStatus && detail.meta.buyStatus !== '开放申购' ? html`<span class="tag warn">${detail.meta.buyStatus}</span>` : null}`;
+    ${gname ? html`<span class="tag solid">${gname}</span>` : null}
+    <span>${row.type || ''}</span>${detail?.meta?.buyStatus && detail.meta.buyStatus !== '开放申购' ? html`<span class="tag warn">${detail.meta.buyStatus}</span>` : null}
+    ${onToggleFav ? html`<button class="linkish small" onClick=${onToggleFav}>${isFav ? '★ 已自选' : '☆ 加自选'}</button>` : null}`;
   return html`<${Drawer} title=${row.name} sub=${sub} onClose=${onClose} width=${700}>
     <${KeyFigures} row=${row} />
     <nav class="tabs">${TABS.map((t) => html`<button class=${tab === t.value ? 'on' : ''} onClick=${() => setTab(t.value)}>${t.label}</button>`)}</nav>
@@ -358,6 +367,55 @@ export function FundDetail({ row, intraday, tab: initialTab, onClose, onChanged,
     ${tab === 'est' && detail ? html`<${EstimateTab} row=${row} detail=${detail} onChanged=${onChanged} />` : null}
     ${tab === 'dca' && detail ? html`<${DcaTab} row=${row} detail=${detail} ledger=${ledger} reloadLedger=${loadLedger} onChanged=${onChanged} />` : null}
     ${tab === 'top' && detail ? html`<${TopTab} row=${row} detail=${detail} />` : null}
-    ${tab === 'edit' && detail ? html`<${EditTab} row=${row} detail=${detail} onChanged=${onChanged} onDeleted=${onDeleted} />` : null}
+    ${tab === 'edit' && detail ? html`<${EditTab} row=${row} detail=${detail} groups=${groups} onChanged=${onChanged} onDeleted=${onDeleted} />` : null}
+  </${Drawer}>`;
+}
+
+// ---------- 自选基金详情：没有份额，只看走势与估算 ----------
+
+const FAV_TABS = TABS.filter((t) => ['overview', 'est', 'top'].includes(t.value));
+
+function FavFigures({ row }) {
+  const e = row.est || {};
+  return html`<div class="kv">
+    <div><div class="k">最新净值</div><div class="v"><${Num} v=${row.nav} kind="nav" /></div>
+      <div class="s">${md(row.navDate)} <${Num} v=${row.navPct} kind="pct" color /></div></div>
+    <div><div class="k">估算净值</div><div class="v">${e.live ? html`<${Num} v=${e.estNav} kind="nav" />` : '—'}</div>
+      <div class="s">${e.live ? html`<${Num} v=${e.estPct} kind="pct" color /> ${when(e.src?.ts)}` : '暂无新行情'}</div></div>
+    <div><div class="k">近一月</div><div class="v"><${Num} v=${row.m1} kind="pct" color /></div>
+      <div class="s">近三月 <${Num} v=${row.m3} kind="pct" color /></div></div>
+    <div><div class="k">近一年</div><div class="v"><${Num} v=${row.y1} kind="pct" color /></div>
+      <div class="s">${row.addedAt ? '加入于 ' + row.addedAt.slice(0, 10) : ''}</div></div>
+  </div>`;
+}
+
+export function FavDetail({ row, intraday, tab: initialTab, held, onClose, onChanged, onRemoved, onHold }) {
+  const [tab, setTab] = useState(FAV_TABS.some((t) => t.value === initialTab) ? initialTab : 'overview');
+  const [detail, setDetail] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    fundDetail(row.code, true).then(setDetail).catch((e) => setErr(e.message));
+  }, [row.code]);
+  const remove = async () => {
+    try {
+      await api('/favs/' + row.code, { method: 'DELETE' });
+      toast(`已移出自选：${row.name}`);
+      onRemoved();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+  const sub = html`<span class="num">${row.code}</span>${kindTag(row) ? html`<span class="tag">${kindTag(row)}</span>` : null}
+    <span class="tag solid">自选</span><span>${row.type || ''}</span>${held ? html`<span class="muted">已持有</span>` : null}`;
+  const footer = html`<button class="btn" onClick=${remove}>移出自选</button>
+    <button class="btn primary" onClick=${onHold}>＋ 记一笔持仓</button>`;
+  return html`<${Drawer} title=${row.name} sub=${sub} onClose=${onClose} width=${700} footer=${footer}>
+    <${FavFigures} row=${row} />
+    <nav class="tabs">${FAV_TABS.map((t) => html`<button class=${tab === t.value ? 'on' : ''} onClick=${() => setTab(t.value)}>${t.label}</button>`)}</nav>
+    ${err ? html`<div class="callout warn">${err}</div>` : null}
+    ${tab === 'overview' ? html`<${Overview} row=${row} detail=${detail} intraday=${intraday} ledger=${[]} />` : null}
+    ${tab !== 'overview' && !detail && !err ? html`<${Loading} text="读取基金资料" />` : null}
+    ${tab === 'est' && detail ? html`<${EstimateTab} row=${row} detail=${detail} onChanged=${onChanged} />` : null}
+    ${tab === 'top' && detail ? html`<${TopTab} row=${row} detail=${detail} />` : null}
   </${Drawer}>`;
 }

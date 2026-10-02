@@ -140,6 +140,45 @@ a { color: inherit; }
 .sec-no { font: 600 12px var(--f-num); color: var(--ink-3); letter-spacing: 0; }
 .sec-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 
+/* ---------- 持仓 / 自选 切换、分组 ---------- */
+.sec-tabs { display: flex; align-items: flex-end; gap: 28px; }
+.sec-tabs button {
+  display: flex; align-items: baseline; gap: 10px; background: none; border: 0; cursor: pointer;
+  font: 800 20px/1.3 var(--f-sans); letter-spacing: .04em; color: var(--ink-3);
+  padding: 0 0 10px; margin-bottom: -12px; border-bottom: 4px solid transparent;
+}
+.sec-tabs button.on { color: var(--ink); border-bottom-color: var(--ink); }
+.sec-tabs button:hover:not(.on) { color: var(--ink-2); }
+.sec-tabs button:focus-visible { outline: 3px solid var(--mark); outline-offset: 2px; }
+.gbar { display: flex; align-items: center; justify-content: space-between; gap: 10px 16px; flex-wrap: wrap; padding: 14px 0 4px; }
+.gbar .seg { max-width: 100%; }
+.gcount { font-family: var(--f-num); font-weight: 500; opacity: .6; margin-left: 2px; }
+.gnote { font-size: 10.5px; margin-left: 6px; opacity: .7; }
+.tag.dim { color: var(--ink-3); border-style: dashed; }
+.add-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.glist { border-top: 1px solid var(--rule); }
+.grow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--hair); }
+.grow .input { padding: 8px 10px; font-size: 15px; }
+.grow-btns { display: inline-flex; }
+.grow-btns .icon-btn { width: 32px; height: 32px; font-size: 16px; }
+.gadd { display: flex; gap: 10px; }
+.gadd .input { flex: 1; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.chip { border: 1px solid var(--ink-3); background: none; padding: 6px 10px; font-size: 12.5px; cursor: pointer; color: var(--ink-2); }
+.chip:hover { background: var(--mark); color: var(--on-mark); border-color: var(--mark); }
+
+/* ---------- 自选 ---------- */
+.favtbl td.trend { vertical-align: middle; }
+.spark-cell { display: inline-flex; align-items: center; gap: 10px; justify-content: flex-end; }
+.spark-cell .num { font-size: 14px; font-weight: 500; }
+.minichart { display: block; overflow: visible; }
+.minichart .zero { stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 3 3; }
+.minichart .line { fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linejoin: round; }
+.minichart .line.up { stroke: var(--up); }
+.minichart .line.down { stroke: var(--down); }
+.card-trend { grid-column: 1 / -1; }
+.card-trend .minichart { width: 100%; margin-top: 8px; }
+
 /* ---------- 按钮与控件 ---------- */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
@@ -405,6 +444,11 @@ select.input { padding-right: 34px; background-image: none; }
   .stats > div:nth-child(3) { padding-left: 0; border-left: 0; }
   .stats > div:nth-child(n + 3) { border-top: 1px solid var(--hair); }
   .row3 { grid-template-columns: 1fr 1fr; }
+  .sec-tabs { gap: 20px; }
+  .sec-tabs button { font-size: 18px; gap: 6px; }
+  .sec-tools { width: 100%; justify-content: space-between; }
+  .grow { grid-template-columns: minmax(0, 1fr) auto; }
+  .grow .toggle { grid-column: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

@@ -5,7 +5,7 @@ import { Drawer, Field, InstrumentPicker, Loading, Num, NumInput, Seg, Toggle, t
 
 const num = (s) => (s === '' || s == null ? NaN : Number(s));
 
-// 快照对应的净值：默认是录入时已公布的最新净值，支付宝还没更新时可以改选前一天
+// 快照对应的净值：默认是录入时已公布的最新净值，平台还没更新时可以改选前一天
 export function snapshotChoices(detail) {
   const navs = detail?.navs || [];
   const sug = detail?.suggest?.snapshotNavDate;
@@ -44,14 +44,21 @@ export function DcaFields({ v, set, meta, navNow }) {
           ${navNow ? html`，按最新净值 <span class="num">${navf(navNow)}</span> 约 <b class="num">${money(net / navNow)}</b> 份` : null}。
           份额按扣款当天（15:00 前）的净值确认。</div>`
       : null}
-    ${limit && amount > +limit[1] ? html`<div class="callout warn">这只基金目前${meta.buyStatus}，超过上限的部分支付宝会扣款失败。</div>` : null}
+    ${limit && amount > +limit[1] ? html`<div class="callout warn">这只基金目前${meta.buyStatus}，超过上限的部分会扣款失败。</div>` : null}
   `;
 }
 
-export function HoldingForm({ detail, initial = {}, submitLabel, onSubmit, withExtras = false, onCancel }) {
+export function GroupSelect({ groups, value, onChange }) {
+  return html`<div class="select-wrap"><select class="input text" value=${value} onChange=${(e) => onChange(e.target.value)}>
+    ${groups.map((g) => html`<option value=${g.id}>${g.name}${g.inTotal ? '' : '（不计入总资产）'}</option>`)}
+  </select></div>`;
+}
+
+export function HoldingForm({ detail, initial = {}, submitLabel, onSubmit, withExtras = false, onCancel, groups }) {
   const meta = detail.meta;
   const choices = snapshotChoices(detail);
   const [mode, setMode] = useState('shares');
+  const [group, setGroup] = useState(initial.group || 'default');
   const [shares, setShares] = useState(initial.shares != null ? String(initial.shares) : '');
   const [cost, setCost] = useState(initial.cost != null ? String(initial.cost) : '');
   const [amount, setAmount] = useState('');
@@ -80,6 +87,7 @@ export function HoldingForm({ detail, initial = {}, submitLabel, onSubmit, withE
     e.preventDefault();
     if (!valid) return;
     const body = { shares: round2(S), cost: Math.round(C * 10000) / 10000, snapshotAt: isoCN(), snapshotNavDate: snapDate };
+    if (groups) body.group = group;
     if (withExtras && dcaOn) {
       if (!(num(dca.amount) > 0)) return toast('请填写定投金额', 'error');
       body.dca = { on: true, amount: num(dca.amount), feeRate: (num(dca.feePct) || 0) / 100, freq: dca.freq, weekday: dca.weekday, monthday: dca.monthday };
@@ -95,19 +103,24 @@ export function HoldingForm({ detail, initial = {}, submitLabel, onSubmit, withE
   };
 
   return html`<form onSubmit=${submit}>
+    ${groups
+      ? html`<${Field} label="分组" hint="按平台或用途分开记，比如支付宝、天天基金、模拟盘；分组可以在持仓列表上方管理。">
+          <${GroupSelect} groups=${groups} value=${group} onChange=${setGroup} />
+        </${Field}>`
+      : null}
     <${Field} label="录入方式">
       <${Seg} options=${[{ value: 'shares', label: '份额 + 成本价' }, { value: 'amount', label: '金额 + 收益' }]} value=${mode} onChange=${setMode} />
     </${Field}>
     ${mode === 'shares'
       ? html`<div class="row2">
-          <${Field} label="持有份额"><${NumInput} value=${shares} onInput=${setShares} placeholder="支付宝「持有份额」" autoFocus /></${Field}>
-          <${Field} label="持仓成本价"><${NumInput} value=${cost} onInput=${setCost} placeholder="支付宝「持仓成本价」" /></${Field}>
+          <${Field} label="持有份额"><${NumInput} value=${shares} onInput=${setShares} placeholder="持仓页的「持有份额」" autoFocus /></${Field}>
+          <${Field} label="持仓成本价"><${NumInput} value=${cost} onInput=${setCost} placeholder="持仓页的「持仓成本价」" /></${Field}>
         </div>`
       : html`<div class="row2">
           <${Field} label="持有金额"><${NumInput} value=${amount} onInput=${setAmount} suffix="元" autoFocus /></${Field}>
           <${Field} label="持有收益" hint="亏损填负数"><${NumInput} value=${profit} onInput=${setProfit} suffix="元" /></${Field}>
         </div>`}
-    <${Field} label="支付宝此刻显示的净值" hint="按录入时间自动判断：默认是此刻已公布的最新净值。如果支付宝上的「最新净值」还是前一天的，就选第二项。">
+    <${Field} label="平台此刻显示的净值" hint="按录入时间自动判断：默认是此刻已公布的最新净值。如果持仓页上的「最新净值」还是前一天的，就选第二项。">
       <div class="choice">
         ${choices.map((c, i) => html`<button type="button" class=${c[0] === snapDate ? 'on' : ''} onClick=${() => setSnapDate(c[0])}>
           <span><span class="num">${c[0]}</span>　<span class="num">${navf(c[1])}</span></span>
@@ -118,7 +131,7 @@ export function HoldingForm({ detail, initial = {}, submitLabel, onSubmit, withE
     ${valid
       ? html`<div class="callout">核对一下：持有 <b class="num">${money(S)}</b> 份，成本价 <b class="num">${navf(C)}</b>，
           按 ${md(snapDate)} 净值折合 <b class="num">${money(value)}</b> 元，持有收益 <b class=${`num ${tone(pnl)}`}>${money(pnl, { sign: true })}</b>
-          （<span class=${`num ${tone(pnl)}`}>${pct((pnl / (S * C)) * 100)}</span>），应和支付宝一致。</div>`
+          （<span class=${`num ${tone(pnl)}`}>${pct((pnl / (S * C)) * 100)}</span>），应和平台上显示的一致。</div>`
       : null}
     ${withExtras
       ? html`
@@ -126,7 +139,7 @@ export function HoldingForm({ detail, initial = {}, submitLabel, onSubmit, withE
           <${Toggle} on=${dcaOn} onChange=${setDcaOn}>这只基金有定投</${Toggle}>
           ${dcaOn
             ? html`<${DcaFields} v=${dca} set=${(p) => setDca({ ...dca, ...p })} meta=${meta} navNow=${detail.navs.at(-1)?.[1]} />
-              <div class="field-hint">支付宝份额里已经包含的扣款不会重复计算：本站只累计 ${md(detail.suggest.dcaStart)} 及之后的扣款
+              <div class="field-hint">平台份额里已经包含的扣款不会重复计算：本站只累计 ${md(detail.suggest.dcaStart)} 及之后的扣款
               （${meta.confirmDays >= 2 ? 'QDII 份额 T+2 确认' : '份额 T+1 确认'}），开始日期之后可以在详情里改。</div>`
             : null}
         </div>
@@ -161,11 +174,12 @@ function FundHeader({ detail }) {
   </div>`;
 }
 
-export function AddFund({ onClose, onAdded }) {
+export function AddFund({ onClose, onAdded, mode = 'hold', groups, defaultGroup = 'default', presetCode, favCodes = [] }) {
   const [q, setQ] = useState('');
   const [results, setResults] = useState(null);
   const [cursor, setCursor] = useState(0);
-  const [sel, setSel] = useState(null);
+  const [sel, setSel] = useState(presetCode ? { code: presetCode, name: presetCode, type: '' } : null);
+  const [faved, setFaved] = useState(() => new Set(favCodes));
   const [detail, setDetail] = useState(null);
   const [err, setErr] = useState(null);
   const dq = useDebounced(q.trim(), 180);
@@ -191,11 +205,23 @@ export function AddFund({ onClose, onAdded }) {
       .catch((e) => setErr(e.message));
   }, [sel]);
 
+  const addFav = async (r) => {
+    try {
+      await api('/favs', { method: 'POST', body: { code: r.code } });
+      setFaved(new Set([...faved, r.code]));
+      toast(`已加入自选：${r.name}`);
+      if (mode === 'fav') onAdded();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+  const pick = (r) => (mode === 'fav' ? addFav(r) : setSel(r));
+
   const onKey = (e) => {
     if (!results?.length) return;
     if (e.key === 'ArrowDown') (setCursor(Math.min(cursor + 1, results.length - 1)), e.preventDefault());
     if (e.key === 'ArrowUp') (setCursor(Math.max(cursor - 1, 0)), e.preventDefault());
-    if (e.key === 'Enter') (setSel(results[cursor]), e.preventDefault());
+    if (e.key === 'Enter') (pick(results[cursor]), e.preventDefault());
   };
 
   const save = async (body) => {
@@ -205,23 +231,31 @@ export function AddFund({ onClose, onAdded }) {
   };
 
   if (sel) {
-    return html`<${Drawer} title=${sel.name} sub=${html`<span class="num">${sel.code}</span><span>${sel.type}</span>`} onClose=${onClose} width=${620}>
-      <div class="pad"><button class="linkish" onClick=${() => { setSel(null); setDetail(null); }}>← 换一只</button></div>
+    const name = detail?.meta?.name || sel.name;
+    return html`<${Drawer} title=${name} sub=${html`<span class="num">${sel.code}</span><span>${detail?.meta?.type || sel.type}</span>`} onClose=${onClose} width=${620}>
+      <div class="pad add-actions">
+        ${presetCode ? html`<span></span>` : html`<button class="linkish" onClick=${() => { setSel(null); setDetail(null); }}>← 换一只</button>`}
+        ${faved.has(sel.code)
+          ? html`<span class="muted small">★ 已在自选</span>`
+          : html`<button class="linkish" onClick=${() => addFav({ code: sel.code, name })}>☆ 加入自选</button>`}
+      </div>
       ${err ? html`<div class="callout warn">${err}</div>` : null}
       ${!detail && !err ? html`<${Loading} text="读取基金资料" />` : null}
-      ${detail ? html`<${FundHeader} detail=${detail} /><${HoldingForm} detail=${detail} submitLabel="保存到持仓" onSubmit=${save} withExtras />` : null}
+      ${detail ? html`<${FundHeader} detail=${detail} /><${HoldingForm} detail=${detail} submitLabel="保存到持仓" onSubmit=${save} withExtras
+          groups=${groups} initial=${{ group: defaultGroup }} />` : null}
     </${Drawer}>`;
   }
 
-  return html`<${Drawer} title="添加基金" sub="输入代码、名称或拼音首字母" onClose=${onClose} width=${620}>
+  const fav = mode === 'fav';
+  return html`<${Drawer} title=${fav ? '添加自选' : '添加基金'} sub=${fav ? '搜索后点一下就加入自选，首页可以看到它的估值走势' : '输入代码、名称或拼音首字母'} onClose=${onClose} width=${620}>
     <div class="field" style=${{ marginTop: '18px' }}>
       <input ref=${inputRef} class="input text" placeholder="如 022424、中证A500、纳斯达克、yfdlc" value=${q} autofocus
         onInput=${(e) => setQ(e.target.value)} onKeyDown=${onKey} />
     </div>
     ${err ? html`<div class="callout warn">${err}</div>` : null}
     <div class="results">
-      ${(results || []).map((r, i) => html`<button type="button" class=${`result ${i === cursor ? 'on' : ''}`} onClick=${() => setSel(r)} onMouseEnter=${() => setCursor(i)}>
-        <span class="code">${r.code}</span><span class="nm">${r.name}</span><span class="muted small">${r.type}</span>
+      ${(results || []).map((r, i) => html`<button type="button" class=${`result ${i === cursor ? 'on' : ''}`} onClick=${() => pick(r)} onMouseEnter=${() => setCursor(i)}>
+        <span class="code">${r.code}</span><span class="nm">${r.name}</span><span class="muted small">${fav && faved.has(r.code) ? '★ 已在自选' : r.type}</span>
       </button>`)}
       ${results && !results.length ? html`<div class="pad muted">没有找到这只基金</div>` : null}
       ${!results ? html`<div class="pad note">支持场外基金和场内 ETF / LOF。估算方式会自动选择：指数基金跟踪其指数，主动基金用前十大重仓股，之后可以改成链接到任意指数。</div>` : null}

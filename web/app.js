@@ -3,7 +3,8 @@ import { AccountBlock, AdminBlock, Login } from './js/account.js';
 import { AddFund } from './js/add.js';
 import { api } from './js/api.js';
 import { IntradayChart } from './js/charts.js';
-import { FundDetail } from './js/detail.js';
+import { FavDetail, FundDetail } from './js/detail.js';
+import { FavEmpty, FavList, GroupBar, GroupManager } from './js/lists.js';
 import { estLabel, hms, kindTag, md, money, weekday, when, ymd } from './js/fmt.js';
 import { Drawer, InstrumentPicker, Loading, Num, Seg, Toaster, toast } from './js/ui.js';
 
@@ -130,11 +131,15 @@ function Masthead({ data, at, busy, err, reload, onSettings, user }) {
   </header>`;
 }
 
-function Summary({ t, intraday }) {
-  const base = intraday && intraday.length ? intraday[0].b : null;
+function Summary({ t, intraday, group }) {
+  // 全部：组合总值；某个分组：该分组自己的估值（新记录里按分组存了 [估算值, 净值]）
+  const pts = group ? (intraday || []).filter((p) => p.g?.[group.id]) : intraday;
+  const first = pts && pts.length ? pts[0] : null;
+  const base = first ? (group ? first.g[group.id][1] : first.b) : null;
+  const val = (p) => (base == null ? null : (group ? p.g[group.id][0] : p.v) - base);
   return html`<section class="summary">
     <div class="fig">
-      <div class="fig-label"><span>实时估算 · 总资产</span><span class="en">ESTIMATED</span></div>
+      <div class="fig-label"><span>实时估算 · ${group ? group.name : '总资产'}</span><span class="en">${group && !group.inTotal ? '不计入总资产' : 'ESTIMATED'}</span></div>
       <div class="fig-big"><span class="cur">¥</span><${Num} v=${t.estValue} /></div>
       <div class="fig-sub">
         <span>较最新净值</span><${Num} v=${t.estDayPnl} sign color /><${Num} v=${t.estDayPct} kind="pct" color />
@@ -155,7 +160,7 @@ function Summary({ t, intraday }) {
     </div>
     <div class="fig fig-chart">
       <div class="fig-label"><span>今日估值走势</span><span class="en">INTRADAY</span></div>
-      <${IntradayChart} points=${intraday} value=${(p) => (base == null ? null : p.v - base)} height=${96} />
+      <${IntradayChart} points=${pts} value=${val} height=${96} />
     </div>
   </section>`;
 }
@@ -203,7 +208,7 @@ function sortRows(rows, by) {
   return k ? [...rows].sort((a, b) => k(b) - k(a)) : rows;
 }
 
-function Holdings({ rows, today, onOpen }) {
+function Holdings({ rows, today, onOpen, groupName }) {
   return html`
     <table class="tbl">
       <thead><tr>
@@ -217,7 +222,7 @@ function Holdings({ rows, today, onOpen }) {
             <td><div class="fund-cell">
               <div class="fund-name">${r.name}</div>
               <div class="fund-meta"><span class="code">${r.code}</span>${kindTag(r) && html`<span class="tag">${kindTag(r)}</span>`}
-                <span class="src-line">${estLabel(r.est)}</span>${dcaTag(r)}</div>
+                <span class="src-line">${estLabel(r.est)}</span>${dcaTag(r)}${groupName ? groupName(r) : null}</div>
             </div></td>
             <td><div class="cell-main"><${Num} v=${r.nav} kind="nav" /></div>
               <div class="cell-sub">${md(r.navDate)} <${Num} v=${r.navPct} kind="pct" color /></div></td>
@@ -262,7 +267,7 @@ function Holdings({ rows, today, onOpen }) {
 function Empty({ onAdd }) {
   return html`<div class="empty">
     <h3>还没有持仓</h3>
-    <p>打开支付宝「理财 → 基金 → 持有」，逐只点进基金，照着页面上的数字录入：</p>
+    <p>打开支付宝、天天基金等平台的基金持仓页，逐只点进基金，照着页面上的数字录入：</p>
     <ol>
       <li>搜索基金名称或代码</li>
       <li>填「持有份额」和「持仓成本价」（也可以填持有金额和持有收益）</li>
@@ -342,8 +347,8 @@ function Settings({ auth, user, onClose }) {
       <p>基金公司公布净值后，一律以公布的净值为准，估算只作参考。</p>
     </div>
     <div class="block note">
-      <div class="block-title"><h4>支付宝快照与定投</h4></div>
-      <p>录入持仓时记下的是当时的支付宝快照。本站按录入时间判断快照对应哪天的净值，以及哪些定投扣款已经确认进了份额
+      <div class="block-title"><h4>持仓快照与定投</h4></div>
+      <p>录入持仓时记下的是当时平台持仓页的快照。本站按录入时间判断快照对应哪天的净值，以及哪些定投扣款已经确认进了份额
       （普通基金 T+1 确认，QDII 通常 T+2）；之后的扣款由本站按当天净值和费率自动累计份额。</p>
     </div>
   </${Drawer}>`;
@@ -353,46 +358,130 @@ function FieldRow({ label, children }) {
   return html`<div class="field"><div class="field-label"><span>${label}</span></div><div>${children}</div></div>`;
 }
 
+const FAV_SORTS = [
+  { value: 'manual', label: '默认' },
+  { value: 'est', label: '估算涨跌' },
+  { value: 'm1', label: '近一月' },
+];
+
+function sortFavs(rows, by) {
+  const k = { est: (r) => (r.est?.live ? r.est.estPct : -1e9), m1: (r) => r.m1 ?? -1e9 }[by];
+  return k ? [...rows].sort((a, b) => k(b) - k(a)) : rows;
+}
+
 function Main({ auth, user }) {
   const route = useRoute();
   const { data, err, busy, at, reload } = usePortfolio();
   const intraday = useIntraday(at);
   const [sort, setSort] = useState(store.get('sort', 'manual'));
+  const [favSort, setFavSort] = useState(store.get('favSort', 'manual'));
+  // ?view=fav / ?view=hold 可以直接打开某个标签（方便收藏链接）
+  const [view, setView] = useState(() => ({ fav: 'fav', hold: 'hold' })[new URLSearchParams(location.search).get('view')] || store.get('view', 'hold'));
+  const [groupSel, setGroupSel] = useState(store.get('group', 'all'));
   const today = data ? data.now.slice(0, 10) : ymd();
-  const rows = useMemo(() => (data ? sortRows(data.holdings, sort) : []), [data, sort]);
+  const groups = data?.groups || [];
+  const group = groups.find((g) => g.id === groupSel) || null; // 选中的分组不存在了就回到「全部」
+  const rows = useMemo(
+    () => (data ? sortRows(data.holdings.filter((r) => !group || r.group === group.id), sort) : []),
+    [data, sort, group?.id],
+  );
+  const favRows = useMemo(() => (data ? sortFavs(data.favs || [], favSort) : []), [data, favSort]);
+  const favCodes = new Set((data?.favs || []).map((f) => f.code));
+  const heldCodes = new Set((data?.holdings || []).map((h) => h.code));
   const current = route.name === 'f' ? data?.holdings.find((h) => h.id === route.arg) : null;
-  const setSortP = (v) => {
-    setSort(v);
-    store.set('sort', v);
+  const currentFav = route.name === 'fav' ? data?.favs?.find((f) => f.code === route.arg) : null;
+  const pref = (setter, key) => (v) => {
+    setter(v);
+    store.set(key, v);
+  };
+  const setSortP = pref(setSort, 'sort');
+  const groupTag = !group && groups.length > 1
+    ? (r) => {
+        const g = groups.find((x) => x.id === r.group);
+        return g ? html`<span class=${`tag ${g.inTotal ? '' : 'dim'}`}>${g.name}</span>` : null;
+      }
+    : null;
+  const toggleFav = async (code) => {
+    try {
+      if (favCodes.has(code)) await api('/favs/' + code, { method: 'DELETE' });
+      else await api('/favs', { method: 'POST', body: { code } });
+      toast(favCodes.has(code) ? '已移出自选' : '已加入自选');
+      reload();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+  const removeFav = async (r) => {
+    try {
+      await api('/favs/' + r.code, { method: 'DELETE' });
+      toast(`已移出自选：${r.name}`);
+      reload();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
   };
   return html`<div class="wrap">
     <${Masthead} data=${data} at=${at} busy=${busy} err=${err} reload=${reload} user=${auth ? user : null} onSettings=${() => route.open('#/settings')} />
     ${!data
       ? html`<${Loading} text=${err || '正在读取持仓与行情'} />`
       : html`
-        <${Summary} t=${data.totals} intraday=${intraday} />
+        <${Summary} t=${group ? group.totals : data.totals} intraday=${intraday} group=${group} />
         <${WatchStrip} watch=${data.watch} onEdit=${() => route.open('#/watch')} />
         <div class="sec-head">
-          <h2><span class="sec-no">01</span>持仓<span class="sec-no">${data.holdings.length} 只</span></h2>
+          <div class="sec-tabs" role="tablist">
+            <button role="tab" aria-selected=${view === 'hold'} class=${view === 'hold' ? 'on' : ''} onClick=${() => pref(setView, 'view')('hold')}>
+              <span class="sec-no">01</span>持仓<span class="sec-no">${data.holdings.length} 只</span></button>
+            <button role="tab" aria-selected=${view === 'fav'} class=${view === 'fav' ? 'on' : ''} onClick=${() => pref(setView, 'view')('fav')}>
+              <span class="sec-no">02</span>自选<span class="sec-no">${(data.favs || []).length} 只</span></button>
+          </div>
           <div class="sec-tools">
-            ${data.holdings.length > 1 ? html`<${Seg} small options=${SORTS} value=${sort} onChange=${setSortP} label="排序" />` : null}
-            <button class="btn primary" onClick=${() => route.open('#/add')}>＋ 添加基金</button>
+            ${view === 'hold'
+              ? html`${rows.length > 1 ? html`<${Seg} small options=${SORTS} value=${sort} onChange=${setSortP} label="排序" />` : null}
+                  ${groups.length < 2 ? html`<button class="linkish small" onClick=${() => route.open('#/groups')}>分组</button>` : null}
+                  <button class="btn primary" onClick=${() => route.open('#/add')}>＋ 添加基金</button>`
+              : html`${favRows.length > 1 ? html`<${Seg} small options=${FAV_SORTS} value=${favSort} onChange=${pref(setFavSort, 'favSort')} label="排序" />` : null}
+                  <button class="btn primary" onClick=${() => route.open('#/add/fav')}>＋ 添加自选</button>`}
           </div>
         </div>
-        ${data.holdings.length ? html`<${Holdings} rows=${rows} today=${today} onOpen=${(id) => route.open('#/f/' + id)} />` : html`<${Empty} onAdd=${() => route.open('#/add')} />`}
+        ${view === 'hold'
+          ? html`${groups.length > 1
+                ? html`<${GroupBar} groups=${groups} value=${group ? group.id : 'all'} total=${data.holdings.length}
+                    onChange=${pref(setGroupSel, 'group')} onManage=${() => route.open('#/groups')} />`
+                : null}
+              ${rows.length
+                ? html`<${Holdings} rows=${rows} today=${today} groupName=${groupTag} onOpen=${(id) => route.open('#/f/' + id)} />`
+                : data.holdings.length
+                  ? html`<div class="empty"><p>这个分组里还没有基金。添加基金时可以选择分组，也可以在持仓详情的「更新持仓」里改分组。</p></div>`
+                  : html`<${Empty} onAdd=${() => route.open('#/add')} />`}`
+          : favRows.length
+            ? html`<${FavList} rows=${favRows} intraday=${intraday} heldCodes=${heldCodes} onOpen=${(code) => route.open('#/fav/' + code)} onRemove=${removeFav} />`
+            : html`<${FavEmpty} onAdd=${() => route.open('#/add/fav')} />`}
       `}
     <footer class="foot">
       <p>估算仅供参考，一切以基金公司公布的净值为准。行情来自天天基金、东方财富、腾讯财经与 Yahoo Finance，
       港股行情可能有延迟；罗素、MSCI 等指数用跟踪 ETF 代理。</p>
       <span>基金记账簿 · ${today}</span>
     </footer>
-    ${route.name === 'add' ? html`<${AddFund} onClose=${route.close} onAdded=${() => { reload(); route.close(); }} />` : null}
+    ${route.name === 'add' && data
+      ? html`<${AddFund} key=${route.arg || 'hold'} mode=${route.arg === 'fav' ? 'fav' : 'hold'} presetCode=${route.arg === 'hold' ? route.tab : null}
+          groups=${groups} defaultGroup=${group ? group.id : 'default'} favCodes=${[...favCodes]}
+          onClose=${route.close} onAdded=${() => { reload(); route.close(); }} />`
+      : null}
     ${route.name === 'f' && data
       ? current
         ? html`<${FundDetail} key=${current.id} row=${current} intraday=${intraday} tab=${route.tab} onClose=${route.close}
+            groups=${groups} isFav=${favCodes.has(current.code)} onToggleFav=${() => toggleFav(current.code)}
             onChanged=${reload} onDeleted=${() => { reload(); route.close(); }} />`
         : html`<${Drawer} title="找不到这只持仓" onClose=${route.close}><p class="note pad">它可能已经被删除了。</p></${Drawer}>`
       : null}
+    ${route.name === 'fav' && data
+      ? currentFav
+        ? html`<${FavDetail} key=${currentFav.code} row=${currentFav} intraday=${intraday} tab=${route.tab} held=${heldCodes.has(currentFav.code)}
+            onClose=${route.close} onChanged=${reload} onRemoved=${() => { reload(); route.close(); }}
+            onHold=${() => route.open('#/add/hold/' + currentFav.code)} />`
+        : html`<${Drawer} title="不在自选里" onClose=${route.close}><p class="note pad">它可能已经被移出自选了。</p></${Drawer}>`
+      : null}
+    ${route.name === 'groups' && data ? html`<${GroupManager} groups=${groups} onClose=${route.close} onSaved=${reload} />` : null}
     ${route.name === 'watch' && data ? html`<${WatchEditor} watch=${data.watch} onClose=${route.close} onSaved=${reload} />` : null}
     ${route.name === 'settings' ? html`<${Settings} auth=${auth} user=${user} onClose=${route.close} />` : null}
     <${Toaster} />

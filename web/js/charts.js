@@ -168,3 +168,19 @@ export function Spark({ values, width = 72, height = 22 }) {
     .join('');
   return html`<svg class="spark" width=${width} height=${height} aria-hidden="true"><path d=${d} /></svg>`;
 }
+
+// 列表里的迷你走势：今天的盘中估算涨跌。虚线是 0，线的颜色跟着最新涨跌走
+export function MiniChart({ values, width = 132, height = 34 }) {
+  if (!values || values.length < 2) return null;
+  const lo = Math.min(0, ...values);
+  const hi = Math.max(0, ...values);
+  const span = hi - lo || 1;
+  const x = (i) => (width * i) / (values.length - 1);
+  const y = (v) => 2 + (height - 4) * (1 - (v - lo) / span);
+  const line = values.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('');
+  const last = values[values.length - 1];
+  return html`<svg class="minichart" width=${width} height=${height} viewBox=${`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
+    <line class="zero" x1="0" x2=${width} y1=${y(0)} y2=${y(0)} vector-effect="non-scaling-stroke" />
+    <path class=${`line ${last > 0 ? 'up' : last < 0 ? 'down' : ''}`} d=${line} vector-effect="non-scaling-stroke" />
+  </svg>`;
+}

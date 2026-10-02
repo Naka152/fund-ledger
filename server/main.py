@@ -247,6 +247,31 @@ def api_quotes(req, **_):
     return market.quotes(ids)
 
 
+@route('PUT', '/api/groups')
+def api_groups(req, **_):
+    return portfolio.set_groups(req.uid, req.json().get('groups') or [])
+
+
+@route('POST', '/api/favs')
+def api_fav_add(req, **_):
+    return portfolio.add_fav(req.uid, req.json().get('code'))
+
+
+@route('POST', '/api/favs/order')
+def api_fav_order(req, **_):
+    return {'ok': portfolio.reorder_favs(req.uid, req.json().get('codes') or [])}
+
+
+@route('PATCH', r'/api/favs/(?P<code>\d{6})')
+def api_fav_update(req, code):
+    return portfolio.update_fav(req.uid, code, req.json())
+
+
+@route('DELETE', r'/api/favs/(?P<code>\d{6})')
+def api_fav_delete(req, code):
+    return {'ok': portfolio.delete_fav(req.uid, code)}
+
+
 @route('PUT', '/api/watch')
 def api_watch(req, **_):
     return portfolio.set_watch(req.uid, req.json().get('ids') or [])

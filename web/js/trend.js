@@ -111,7 +111,7 @@ function dailyParts(data, ids) {
   return parts;
 }
 
-function buildModel(st, members, unit, group) {
+function buildModel(st, members, unit, group, mode) {
   const { data, range } = st;
   const ids = members.map((m) => m.id);
   let xs;
@@ -120,7 +120,8 @@ function buildModel(st, members, unit, group) {
   if (range === '1d' || range === '5d') {
     const all = data.points || [];
     const pts = all.filter((p) => p.hp);
-    if (pts.length >= 2) {
+    // 分基金要用逐只的记录；只看合计时如果有升级前的旧记录，就用完整的组合合计（和首页小图一致）
+    if (pts.length >= 2 && (mode === 'funds' || pts.length === all.length)) {
       xs = pts.map((p) => ({ t: p.t }));
       parts = intradayParts(pts, ids, range);
       if (pts.length < all.length) note = '更早的记录没有分基金数据，只显示升级之后的部分。';
@@ -132,7 +133,8 @@ function buildModel(st, members, unit, group) {
       if (!raw.length) return { xs: [], series: [], total: [], perFund: false };
       const b0 = range === '1d' ? key(raw[0])[1] : key(raw[0])[0];
       const total = raw.map((p) => (unit === 'pct' ? ((key(p)[0] - b0) / b0) * 100 : key(p)[0] - b0));
-      return { xs, series: [], total, perFund: false, note: '这段时间只有组合合计的记录，分基金折线从现在开始记录。' };
+      return { xs, series: [], total, perFund: false,
+        note: mode === 'funds' ? '这段时间只有组合合计的记录，分基金折线从现在开始记录。' : '' };
     }
   } else {
     xs = data.dates.map((d) => ({ d }));
@@ -293,8 +295,8 @@ export function TrendView({ portfolio, group, onClose }) {
     .filter((h) => (group ? h.group === group.id : inTotal.has(h.group)))
     .map((h) => ({ id: h.id, name: h.name, code: h.code }));
   const model = useMemo(
-    () => (st.data && st.range === range ? buildModel(st, members, unit, group) : null),
-    [st, unit, members.map((m) => m.id).join(), group?.id],
+    () => (st.data && st.range === range ? buildModel(st, members, unit, group, mode) : null),
+    [st, unit, mode, members.map((m) => m.id).join(), group?.id],
   );
   const toggle = (key) => {
     const s = new Set(hidden);

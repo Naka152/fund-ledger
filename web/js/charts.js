@@ -123,7 +123,7 @@ export function IntradayChart({ points, value, format = 'money', height = 110, e
   const x = (i) => L + ((w - L - R) * i) / (pts.length - 1);
   const y = (v) => T + (height - T - B) * (1 - (v - lo) / (hi - lo));
   const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(vs[i]).toFixed(1)}`).join('');
-  const area = `${line}L${x(pts.length - 1).toFixed(1)},${y(0).toFixed(1)}L${x(0).toFixed(1)},${y(0).toFixed(1)}Z`;
+  const area = `${line}L${x(pts.length - 1).toFixed(1)},${height - B}L${x(0).toFixed(1)},${height - B}Z`;
   const gaps = [];
   const starts = [0];
   for (let i = 1; i < pts.length; i++) {
@@ -134,19 +134,21 @@ export function IntradayChart({ points, value, format = 'money', height = 110, e
   }
   const fmt = (v) => (format === 'pct' ? pct(v) : money(v, { sign: true }));
   const last = vs[vs.length - 1];
+  const color = last >= 0 ? 'var(--up)' : 'var(--down)';
   const hp = hover != null ? pts[hover] : null;
   const move = (e) => setHover(pickIndex(e, e.currentTarget, pts.length, x(0), x(pts.length - 1)));
   return html`<div class="chart" ref=${ref}>
     <svg width=${w} height=${height} onPointerMove=${move} onPointerDown=${move} onPointerLeave=${() => setHover(null)}>
       <defs>
-        <clipPath id=${id + 'u'}><rect x="0" y="0" width=${w} height=${y(0)} /></clipPath>
-        <clipPath id=${id + 'd'}><rect x="0" y=${y(0)} width=${w} height=${height} /></clipPath>
+        <linearGradient id=${id} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" style=${{ stopColor: color, stopOpacity: 0.3 }} />
+          <stop offset="1" style=${{ stopColor: color, stopOpacity: 0 }} />
+        </linearGradient>
       </defs>
-      <path class="area-up" d=${area} clip-path=${`url(#${id}u)`} />
-      <path class="area-down" d=${area} clip-path=${`url(#${id}d)`} />
-      <line class="zero" x1=${L} x2=${w - R} y1=${y(0)} y2=${y(0)} />
+      <path d=${area} fill=${`url(#${id})`} />
+      <line class="tv-base" x1=${L} x2=${w - R} y1=${y(0)} y2=${y(0)} />
       ${gaps.map((g) => html`<line class="gap" x1=${g} x2=${g} y1=${T} y2=${height - B} />`)}
-      <path class="line thin" d=${line} />
+      <path class="tv-line" d=${line} style=${{ stroke: color }} />
       ${starts.map((i) => html`<text class="tick" x=${x(i) + (i ? 4 : 0)} y=${height - 4}>${hm(pts[i].t)}</text>`)}
       <text class=${`tick strong`} x=${w - R} y=${height - 4} text-anchor="end">${hm(pts[pts.length - 1].t)} ${fmt(last)}</text>
       ${hp ? html`<line class="xh" x1=${x(hover)} x2=${x(hover)} y1=${T} y2=${height - B} />` : null}

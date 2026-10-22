@@ -1,5 +1,5 @@
-// 全屏估值走势：今日 / 5日用分钟记录，1月及以上用历史净值按当前份额回溯。
-// 可以只看合计，也可以每只基金一条线，再叠一条合计线。
+// 全屏估值走势（行情软件样式）：今日 / 5日用分钟记录，1月及以上用历史净值按当前份额回溯。
+// 合计：一条总市值折线；分基金：每只基金的市值一层层往上叠，最上沿就是合计。
 import { html, useEffect, useMemo, useRef, useState } from '../vendor/preact-htm.js';
 import { api } from './api.js';
 import { decFor, ticks, useWidth } from './charts.js';
@@ -16,7 +16,7 @@ const RANGES = [
 ];
 const MODES = [
   { value: 'total', label: '合计' },
-  { value: 'funds', label: '分基金' },
+  { value: 'funds', label: '分基金叠加' },
 ];
 const UNITS = [
   { value: 'amt', label: '金额' },
@@ -24,7 +24,7 @@ const UNITS = [
 ];
 // 分类色只用 6 个（不用红绿，避免和涨跌混淆），多出来的基金并成「其他」
 const COLORS = ['var(--s1)', 'var(--s2)', 'var(--s3)', 'var(--s4)', 'var(--s5)', 'var(--s6)'];
-const MAX_LINES = COLORS.length;
+let uid = 0;
 
 const pref = {
   get: (k, d, ok) => {
@@ -64,130 +64,164 @@ function useTrendData(range, reloadKey) {
   return st;
 }
 
-// 把一组持仓的「变化量」合成一条线：金额 = Σ变化；涨跌幅 = Σ变化 / Σ起点
-function combine(parts, n, unit) {
-  const out = new Array(n).fill(null);
-  for (let i = 0; i < n; i++) {
-    let d = 0;
-    let b = 0;
-    let any = false;
-    for (const p of parts) {
-      if (p.delta[i] == null) continue;
-      d += p.delta[i];
-      b += p.base;
-      any = true;
-    }
-    if (any) out[i] = unit === 'pct' ? (b ? (d / b) * 100 : null) : d;
-  }
-  return out;
-}
+const sum = (arr) => arr.reduce((a, v) => a + (v || 0), 0);
 
-// 每只持仓得到 { delta: 每个点相对起点的变化（元）, base: 起点市值 }
-function intradayParts(points, ids, range) {
-  const parts = {};
-  for (const id of ids) {
-    let first = null;
-    const delta = points.map((p) => {
-      const v = p.hp?.[id];
-      if (!v) return null;
-      if (!first) first = v;
-      // 今日：以开盘前的最新净值为基准（与首页小图一致）；多日：从区间起点算起
-      const off = range === '1d' ? first[2] || 0 : 0;
-      return v[1] - first[1] + off;
+// 把基金列表折成最多 6 层：前 5 只各一层，其余合成「其他」
+function foldBands(members, valuesOf, n) {
+  const present = members.map((m) => ({ ...m, values: valuesOf(m.id) })).filter((m) => m.values);
+  const keep = present.length > COLORS.length ? present.slice(0, COLORS.length - 1) : present;
+  const rest = present.slice(keep.length);
+  const bands = keep.map((m, i) => ({ key: m.id, name: m.name, code: m.code, color: COLORS[i], values: m.values }));
+  if (rest.length) {
+    bands.push({
+      key: '_rest', name: `其他 ${rest.length} 只`, code: '', color: 'var(--ink-3)',
+      values: Array.from({ length: n }, (_, i) => sum(rest.map((m) => m.values[i]))),
     });
-    if (first) parts[id] = { delta, base: range === '1d' ? first[0] - (first[2] || 0) : first[0] };
   }
-  return parts;
+  return bands;
 }
 
-function dailyParts(data, ids) {
-  const parts = {};
-  for (const h of data.holdings || []) {
-    if (!ids.includes(h.id)) continue;
-    const base = h.values.find((v) => v != null);
-    if (base == null) continue;
-    parts[h.id] = { delta: h.values.map((v) => (v == null ? null : v - base)), base };
-  }
-  return parts;
-}
-
+/**
+ * 统一成：xs（时间或日期）、total（合计市值）、base（基准线：今日为最新净值对应的市值，其余为区间起点）、
+ * bands（分基金市值，可能为空）。涨跌幅模式下 total/base 换算成相对基准的百分比。
+ */
 function buildModel(st, members, unit, group, mode) {
   const { data, range } = st;
   const ids = members.map((m) => m.id);
   let xs;
-  let parts;
+  let total;
+  let base;
+  let bands = null;
   let note = '';
   if (range === '1d' || range === '5d') {
     const all = data.points || [];
-    const pts = all.filter((p) => p.hp);
-    // 分基金要用逐只的记录；只看合计时如果有升级前的旧记录，就用完整的组合合计（和首页小图一致）
-    if (pts.length >= 2 && (mode === 'funds' || pts.length === all.length)) {
-      xs = pts.map((p) => ({ t: p.t }));
-      parts = intradayParts(pts, ids, range);
-      if (pts.length < all.length) note = '更早的记录没有分基金数据，只显示升级之后的部分。';
+    const hpPts = all.filter((p) => p.hp && ids.some((id) => p.hp[id]));
+    if (hpPts.length >= 2 && (mode === 'funds' || hpPts.length === all.length)) {
+      xs = hpPts.map((p) => ({ t: p.t }));
+      bands = foldBands(members, (id) => (hpPts.some((p) => p.hp[id]) ? hpPts.map((p) => p.hp[id]?.[0] ?? null) : null), xs.length);
+      total = hpPts.map((p) => sum(ids.map((id) => p.hp[id]?.[0])));
+      const p0 = hpPts[0];
+      base = range === '1d' ? sum(ids.map((id) => (p0.hp[id] ? p0.hp[id][0] - (p0.hp[id][2] || 0) : 0))) : total[0];
+      if (hpPts.length < all.length) note = '更早的记录没有分基金数据，只显示升级之后的部分。';
     } else {
       // 升级前的旧记录只有组合合计
-      const key = (p) => (group ? p.g?.[group.id] : [p.v, p.b]);
-      const raw = all.filter(key);
-      xs = raw.map((p) => ({ t: p.t }));
-      if (!raw.length) return { xs: [], series: [], total: [], perFund: false };
-      const b0 = range === '1d' ? key(raw[0])[1] : key(raw[0])[0];
-      const total = raw.map((p) => (unit === 'pct' ? ((key(p)[0] - b0) / b0) * 100 : key(p)[0] - b0));
-      return { xs, series: [], total, perFund: false,
-        note: mode === 'funds' ? '这段时间只有组合合计的记录，分基金折线从现在开始记录。' : '' };
+      const key = (p) => (group ? p.g?.[group.id] : p.v != null ? [p.v, p.b] : null);
+      const pts = all.filter(key);
+      xs = pts.map((p) => ({ t: p.t }));
+      total = pts.map((p) => key(p)[0]);
+      base = pts.length ? (range === '1d' ? key(pts[0])[1] : total[0]) : null;
+      if (mode === 'funds') note = '这段时间只有组合合计的记录，分基金叠加从现在开始记录。';
     }
   } else {
     xs = data.dates.map((d) => ({ d }));
     if (data.est) xs.push({ est: true });
-    parts = dailyParts(data, ids);
+    const byId = Object.fromEntries((data.holdings || []).map((h) => [h.id, h.values]));
+    // 区间里还没有净值的日子按第一个净值补平，免得合计在基金成立那天跳一下
+    const filled = (id) => {
+      const v = byId[id];
+      if (!v) return null;
+      const first = v.find((x) => x != null);
+      return first == null ? null : v.map((x) => (x == null ? first : x));
+    };
+    bands = foldBands(members, filled, xs.length);
+    total = xs.map((_, i) => sum(ids.map((id) => filled(id)?.[i])));
+    base = total[0];
     note = '1 月以上按每只基金当前的份额回溯计算（不含期间买卖），最后一个点是实时估算。';
   }
-  const n = xs.length;
-  const present = members.filter((m) => parts[m.id]);
-  const shown = present.slice(0, present.length > MAX_LINES ? MAX_LINES - 1 : MAX_LINES);
-  const rest = present.slice(shown.length);
-  const series = shown.map((m, i) => ({ key: m.id, name: m.name, code: m.code, color: COLORS[i], values: combine([parts[m.id]], n, unit) }));
-  if (rest.length) {
-    series.push({ key: '_rest', name: `其他 ${rest.length} 只`, code: '', color: 'var(--ink-3)', dashed: true,
-      values: combine(rest.map((m) => parts[m.id]), n, unit) });
+  if (unit === 'pct' && base) {
+    total = total.map((v) => (v / base - 1) * 100);
+    base = 0;
   }
-  const total = combine(present.map((m) => parts[m.id]), n, unit);
-  return { xs, series, total, perFund: present.length > 0, note };
+  return { xs, total, base, bands: bands && bands.length ? bands : null, note, range };
 }
 
-const fmt = (v, unit) => (unit === 'pct' ? pct(v) : money(v, { sign: true }));
+function last(arr) {
+  for (let i = arr.length - 1; i >= 0; i--) if (arr[i] != null) return arr[i];
+  return null;
+}
 
-function xLabel(x, kind) {
+const CN_WD = '日一二三四五六';
+
+function xLabel(x, kind, long = false) {
   if (x.est) return '实时';
-  if (x.d) return md(x.d);
-  return kind === '5d' ? `${md(ymd(new Date(x.t * 1000)))} ${hm(x.t)}` : hm(x.t);
+  if (x.d) return long ? `${x.d} 周${CN_WD[new Date(x.d + 'T00:00:00+08:00').getUTCDay()]}` : md(x.d);
+  const d = ymd(new Date(x.t * 1000));
+  return long || kind === '5d' ? `${md(d)} ${hm(x.t)}` : hm(x.t);
 }
 
-function TrendChart({ model, unit, mode, hidden, kind, height }) {
+// 时间轴刻度：分钟数据在整点、开盘和跨日处标注（跨日加粗「22日」）；日线在月初加粗「10月」，其余标日期
+function timeTicks(xs) {
+  const out = [];
+  const multiDay = xs[0]?.t && ymd(new Date(xs[0].t * 1000)) !== ymd(new Date((last(xs.map((x) => x.t)) ?? xs[0].t) * 1000));
+  for (let i = 0; i < xs.length; i++) {
+    const x = xs[i];
+    const p = xs[i - 1];
+    if (x.est) {
+      out.push({ i, text: '实时', pri: 1 });
+    } else if (x.t) {
+      const d = ymd(new Date(x.t * 1000));
+      const pd = p && ymd(new Date(p.t * 1000));
+      const h = hm(x.t);
+      if (!p) out.push(multiDay ? { i, text: `${+d.slice(8)}日`, strong: true, pri: 3 } : { i, text: h, pri: 2 });
+      else if (d !== pd) out.push({ i, text: `${+d.slice(8)}日`, strong: true, pri: 3 });
+      else if (x.t - p.t > 20 * 60) out.push({ i, text: h, pri: 2 });
+      else if (h.slice(0, 2) !== hm(p.t).slice(0, 2)) out.push({ i, text: h.slice(0, 2) + ':00', pri: 1 });
+    } else if (!p) {
+      out.push({ i, text: md(x.d), pri: 2 });
+    } else if (x.d.slice(0, 4) !== p.d?.slice(0, 4)) {
+      out.push({ i, text: x.d.slice(0, 4), strong: true, pri: 4 });
+    } else if (x.d.slice(5, 7) !== p.d?.slice(5, 7)) {
+      out.push({ i, text: `${+x.d.slice(5, 7)}月`, strong: true, pri: 3 });
+    } else {
+      out.push({ i, text: String(+x.d.slice(8)), pri: 0 });
+    }
+  }
+  return out;
+}
+
+function TrendChart({ model, unit, stacked, kind, height }) {
   const [ref, w] = useWidth(900);
   const [hover, setHover] = useState(null);
-  const { xs, total } = model;
-  const lines = mode === 'funds' ? model.series.filter((s) => !hidden.has(s.key)) : [];
+  const [gid] = useState(() => 'tg' + ++uid);
+  const { xs, total, base } = model;
   const n = xs.length;
   if (n < 2) {
     return html`<div ref=${ref} class="trend-empty muted">
       ${kind === '1d' ? '今天还没有记录。交易时段内每分钟记录一次估值，开盘后这里就会画出来。' : '这个区间还没有足够的数据。'}
     </div>`;
   }
-  const all = [0];
-  for (const arr of [total, ...lines.map((l) => l.values)]) for (const v of arr) if (v != null) all.push(v);
-  let lo = Math.min(...all);
-  let hi = Math.max(...all);
-  const pad = (hi - lo) * 0.08 || 1;
-  lo -= pad;
-  hi += pad;
-  const L = 0, R = 76, T = 14, B = 30;
-  const x = (i) => L + ((w - L - R) * i) / (n - 1);
+  const bands = stacked ? model.bands : null;
+  // 叠加：逐层累加；最上面一层的上沿就是合计
+  const cum = [];
+  if (bands) {
+    let acc = new Array(n).fill(0);
+    for (const b of bands) {
+      acc = acc.map((a, i) => a + (b.values[i] || 0));
+      cum.push(acc);
+    }
+  }
+  const top = bands ? cum[cum.length - 1] : total;
+  const vals = top.filter((v) => v != null);
+  let lo;
+  let hi;
+  if (bands) {
+    lo = 0; // 叠加图从 0 开始，每一层的厚度才是真实的市值
+    hi = Math.max(...vals) * 1.06;
+  } else {
+    lo = Math.min(...vals, base ?? Infinity);
+    hi = Math.max(...vals, base ?? -Infinity);
+    const pad = (hi - lo) * 0.12 || Math.abs(hi) * 0.002 || 1;
+    lo -= pad;
+    hi += pad;
+  }
+  const R = 92, T = 30, B = 26; // 顶部留一行给左上角的数值说明
+  const plotW = w - R;
+  const x = (i) => (plotW * i) / (n - 1);
   const y = (v) => T + (height - T - B) * (1 - (v - lo) / (hi - lo));
-  const path = (vals) => {
+  const linePath = (arr) => {
     let d = '';
     let pen = false;
-    vals.forEach((v, i) => {
+    arr.forEach((v, i) => {
       if (v == null) {
         pen = false;
         return;
@@ -197,78 +231,112 @@ function TrendChart({ model, unit, mode, hidden, kind, height }) {
     });
     return d;
   };
-  const tk = ticks(lo, hi, 5);
-  const dec = unit === 'pct' ? Math.max(1, decFor(tk.step)) : Math.max(0, decFor(tk.step));
-  const tickText = (t) => (unit === 'pct' ? t.toFixed(dec) + '%' : money(t, { dec }));
-  // 分钟数据：时间断开超过 20 分钟（午休、收盘到夜盘、隔日）的地方画虚线并标时间
-  const breaks = [];
-  const labels = [];
-  if (xs[0].t) {
-    labels.push(0);
-    for (let i = 1; i < n; i++) {
-      if (xs[i].t - xs[i - 1].t > 20 * 60) {
-        breaks.push((x(i) + x(i - 1)) / 2);
-        labels.push(i);
-      }
-    }
-  } else {
-    const k = Math.max(1, Math.round((n - 1) / 5));
-    for (let i = 0; i < n - 1; i += k) labels.push(i);
+  const bandPath = (upper, lower) => {
+    let d = upper.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('');
+    for (let i = n - 1; i >= 0; i--) d += `L${x(i).toFixed(1)},${y(lower ? lower[i] : 0).toFixed(1)}`;
+    return d + 'Z';
+  };
+  const lastV = last(total);
+  const lastTop = last(top);
+  const up = base != null && lastV != null ? lastV >= base : true;
+  const lineColor = up ? 'var(--up)' : 'var(--down)';
+  const tk = ticks(lo, hi, Math.max(3, Math.round(height / 70)));
+  const dec = unit === 'pct' ? Math.max(1, decFor(tk.step)) : Math.min(2, Math.max(0, decFor(tk.step)));
+  const axisText = (v, d = dec) => (unit === 'pct' ? pct(v, d) : money(v, { dec: d }));
+  // 时间轴：按优先级挑不重叠的刻度
+  const cand = timeTicks(xs).sort((a, b) => b.pri - a.pri || a.i - b.i);
+  // 挤掉的月份 / 跨日刻度仍占着位置，免得旁边冒出一个孤零零的日期
+  const chosen = [];
+  const held = [];
+  for (const c of cand) {
+    if ([...chosen, ...held.filter((o) => o.pri > c.pri)].every((o) => Math.abs(x(o.i) - x(c.i)) >= 58)) chosen.push(c);
+    else if (c.pri >= 3) held.push(c);
   }
-  if (labels[labels.length - 1] !== n - 1) labels.push(n - 1);
-  // 标签太挤就跳过：从左往右挑，和上一个已显示的、以及最右端的标签都要留出距离
-  const minGap = kind === '5d' ? 96 : 64;
-  const shownLabels = [];
-  for (const i of labels) {
-    if (i === n - 1) continue;
-    const prev = shownLabels[shownLabels.length - 1];
-    if ((prev == null || x(i) - x(prev) >= minGap) && x(n - 1) - x(i) >= minGap) shownLabels.push(i);
-  }
-  shownLabels.push(n - 1);
+  chosen.sort((a, b) => a.i - b.i);
   const move = (e) => {
     const r = e.currentTarget.getBoundingClientRect();
-    const i = Math.round(((e.clientX - r.left - x(0)) / (x(n - 1) - x(0))) * (n - 1));
+    const i = Math.round(((e.clientX - r.left) / plotW) * (n - 1));
     setHover(Math.max(0, Math.min(n - 1, i)));
   };
   const hv = hover;
-  const tipRows = hv == null ? [] : lines.map((l) => ({ ...l, v: l.values[hv] })).filter((l) => l.v != null).sort((a, b) => b.v - a.v);
-  const tipLeft = hv == null ? 0 : x(hv) > w * 0.6 ? Math.max(0, x(hv) - 250) : x(hv) + 14;
-  return html`<div class="chart trend-chart" ref=${ref}>
+  const hvTop = hv != null ? top[hv] : null;
+  // 右侧标签：现值（红/绿底）与基准线（灰底），两者太近时把基准线标签挪开
+  const yLast = y(lastTop);
+  let yBase = base != null && !bands ? y(base) : null;
+  if (yBase != null && Math.abs(yBase - yLast) < 20) yBase = yLast + (yBase >= yLast ? 20 : -20);
+  const baseLabel = model.range === '1d' ? '最新净值' : '区间起点';
+  const tipRows = hv != null && bands
+    ? [...bands].reverse().map((b) => ({ ...b, v: b.values[hv] })).filter((b) => b.v != null)
+    : [];
+  const tipLeft = hv == null ? 0 : x(hv) > plotW * 0.6 ? Math.max(0, x(hv) - 268) : x(hv) + 16;
+  const timeBoxX = hv == null ? 0 : Math.min(Math.max(0, x(hv) - 62), plotW - 124);
+  return html`<div class="chart tv-chart" ref=${ref}>
     <svg width=${w} height=${height} onPointerMove=${move} onPointerDown=${move} onPointerLeave=${() => setHover(null)}>
-      ${tk.out.map((t) => html`<line class="grid" x1=${L} x2=${w - R} y1=${y(t)} y2=${y(t)} />
-        <text class="tick" x=${w - R + 10} y=${y(t) + 3.5}>${tickText(t)}</text>`)}
-      <line class="zero" x1=${L} x2=${w - R} y1=${y(0)} y2=${y(0)} />
-      ${breaks.map((b) => html`<line class="gap" x1=${b} x2=${b} y1=${T} y2=${height - B} />`)}
-      ${lines.map((l) => html`<path class="tline" d=${path(l.values)} style=${{ stroke: l.color }} stroke-dasharray=${l.dashed ? '5 4' : null} />`)}
-      <path class="tline total" d=${path(total)} />
-      ${shownLabels.map((i) => html`<text class="tick" x=${x(i)} y=${height - 8}
-          text-anchor=${i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'}>${xLabel(xs[i], kind)}</text>`)}
-      ${hv != null
-        ? html`<line class="xh" x1=${x(hv)} x2=${x(hv)} y1=${T} y2=${height - B} />
-          ${total[hv] != null ? html`<rect class="dot" x=${x(hv) - 4} y=${y(total[hv]) - 4} width="8" height="8" />` : null}`
+      <defs>
+        <linearGradient id=${gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" style=${{ stopColor: lineColor, stopOpacity: 0.32 }} />
+          <stop offset="1" style=${{ stopColor: lineColor, stopOpacity: 0 }} />
+        </linearGradient>
+      </defs>
+      ${tk.out.map((t) => html`<text class="tv-axis" x=${plotW + 10} y=${y(t) + 4}>${axisText(t)}</text>`)}
+      ${bands
+        ? bands.map((b, k) => html`<path class="tv-band" d=${bandPath(cum[k], k ? cum[k - 1] : null)} style=${{ fill: b.color }} />
+            <path class="tv-band-edge" d=${linePath(cum[k])} style=${{ stroke: b.color }} />`)
+        : html`<path d=${`${linePath(total)}L${x(n - 1)},${height - B}L0,${height - B}Z`} fill=${`url(#${gid})`} />`}
+      ${base != null && !bands ? html`<line class="tv-base" x1="0" x2=${plotW} y1=${y(base)} y2=${y(base)} />` : null}
+      <path class="tv-line" d=${linePath(top)} style=${{ stroke: bands ? 'var(--ink)' : lineColor }} />
+      ${chosen.map((c) => html`<text class=${`tv-time ${c.strong ? 'strong' : ''}`} x=${x(c.i)} y=${height - 7}
+          text-anchor=${c.i === 0 ? 'start' : c.i === n - 1 ? 'end' : 'middle'}>${c.text}</text>`)}
+      ${yBase != null
+        ? html`<g class="tv-tag base"><rect x=${plotW - 64} y=${yBase - 10} width="62" height="20" />
+            <text x=${plotW - 33} y=${yBase + 4} text-anchor="middle">${baseLabel}</text>
+            <rect x=${plotW + 2} y=${yBase - 10} width=${R - 4} height="20" />
+            <text x=${plotW + R / 2} y=${yBase + 4} text-anchor="middle">${axisText(base, 2)}</text></g>`
+        : null}
+      <g class=${`tv-tag now ${bands ? 'ink' : ''}`} style=${{ '--tag': bands ? 'var(--ink)' : lineColor }}>
+        <rect x=${plotW + 2} y=${yLast - 10} width=${R - 4} height="20" />
+        <text x=${plotW + R / 2} y=${yLast + 4} text-anchor="middle">${axisText(lastTop, 2)}</text>
+      </g>
+      ${hv != null && hvTop != null
+        ? html`<g class="tv-cross">
+            <line x1=${x(hv)} x2=${x(hv)} y1=${T} y2=${height - B} />
+            <line x1="0" x2=${plotW} y1=${y(hvTop)} y2=${y(hvTop)} />
+          </g>
+          <g class="tv-tag cross">
+            <rect x=${plotW + 2} y=${y(hvTop) - 10} width=${R - 4} height="20" />
+            <text x=${plotW + R / 2} y=${y(hvTop) + 4} text-anchor="middle">${axisText(hvTop, 2)}</text>
+            <rect x=${timeBoxX} y=${height - B + 3} width="124" height="20" />
+            <text x=${timeBoxX + 62} y=${height - B + 17} text-anchor="middle">${xLabel(xs[hv], kind, true)}</text>
+          </g>`
         : null}
     </svg>
-    ${hv != null
-      ? html`<div class="tip trend-tip" style=${{ left: tipLeft + 'px', top: '8px' }}>
-          <div class="tip-head">${xLabel(xs[hv], kind)}</div>
-          <div class="tip-row strong"><span class="sw ink"></span><span class="tn">合计</span><span>${fmt(total[hv], unit)}</span></div>
-          ${tipRows.map((l) => html`<div class="tip-row"><span class="sw" style=${{ background: l.color }}></span>
-            <span class="tn">${l.name}</span><span>${fmt(l.v, unit)}</span></div>`)}
+    <div class="tv-info">
+      <span class="muted">${xLabel(xs[hv ?? n - 1], kind, true)}</span>
+      <span class="num">${axisText(hv != null ? hvTop : lastTop, 2)}</span>
+      ${base != null && !bands
+        ? (() => {
+            const v = hv != null ? total[hv] : lastV;
+            const dv = v - base;
+            return unit === 'pct'
+              ? html`<span class=${`num ${tone(dv)}`}>${pct(dv)}</span>`
+              : html`<span class=${`num ${tone(dv)}`}>${money(dv, { sign: true })}（${pct(base ? (dv / base) * 100 : null)}）</span>`;
+          })()
+        : null}
+    </div>
+    ${tipRows.length
+      ? html`<div class="tip trend-tip" style=${{ left: tipLeft + 'px', top: '34px' }}>
+          <div class="tip-row strong"><span class="sw ink"></span><span class="tn">合计</span><span>${money(hvTop)}</span></div>
+          ${tipRows.map((b) => html`<div class="tip-row"><span class="sw" style=${{ background: b.color }}></span>
+            <span class="tn">${b.name}</span><span>${money(b.v)}</span></div>`)}
         </div>`
       : null}
   </div>`;
 }
 
-function last(arr) {
-  for (let i = arr.length - 1; i >= 0; i--) if (arr[i] != null) return arr[i];
-  return null;
-}
-
 export function TrendView({ portfolio, group, onClose }) {
   const [range, setRange] = useState(() => pref.get('range', '1d', RANGES));
-  const [mode, setMode] = useState(() => pref.get('mode', 'funds', MODES));
+  const [mode, setMode] = useState(() => pref.get('mode2', 'total', MODES));
   const [unit, setUnit] = useState(() => pref.get('unit', 'amt', UNITS));
-  const [hidden, setHidden] = useState(() => new Set());
   const st = useTrendData(range, portfolio?.now?.slice(0, 13));
   const close = useRef(onClose);
   close.current = onClose;
@@ -289,32 +357,32 @@ export function TrendView({ portfolio, group, onClose }) {
     setter(v);
     pref.set(k, v);
   };
+  const stacked = mode === 'funds';
+  const effUnit = stacked ? 'amt' : unit; // 叠加只有按金额才有意义
   // 和首页一致：选了分组就只看这个分组；「全部」只看计入总资产的分组
   const inTotal = new Set((portfolio.groups || []).filter((g) => g.inTotal).map((g) => g.id));
   const members = (portfolio.holdings || [])
     .filter((h) => (group ? h.group === group.id : inTotal.has(h.group)))
     .map((h) => ({ id: h.id, name: h.name, code: h.code }));
   const model = useMemo(
-    () => (st.data && st.range === range ? buildModel(st, members, unit, group, mode) : null),
-    [st, unit, mode, members.map((m) => m.id).join(), group?.id],
+    () => (st.data && st.range === range ? buildModel(st, members, effUnit, group, mode) : null),
+    [st, effUnit, mode, members.map((m) => m.id).join(), group?.id],
   );
-  const toggle = (key) => {
-    const s = new Set(hidden);
-    s.has(key) ? s.delete(key) : s.add(key);
-    setHidden(s);
-  };
   const narrow = window.innerWidth < 640;
-  const chartH = Math.max(260, Math.min(narrow ? vh * 0.48 : vh - 330, 640));
-  const totalLast = model ? last(model.total) : null;
-  const firstX = model?.xs?.[0];
-  const lastX = model?.xs?.[model.xs.length - 1];
+  const chartH = Math.max(280, Math.min(narrow ? vh * 0.5 : vh - 300, 660));
+  const showBands = stacked && model?.bands;
+  const lastV = model ? last(model.total) : null;
+  const dv = model && model.base != null && lastV != null ? lastV - model.base : null;
   return html`<div class="fullview" role="dialog" aria-modal="true" aria-label="估值走势">
     <header class="fv-head">
       <div>
         <h3>估值走势<span class="fv-scope">${group ? group.name : '全部持仓'}</span></h3>
-        ${model && totalLast != null
-          ? html`<div class="fv-fig"><span class=${`num ${tone(totalLast)}`}>${fmt(totalLast, unit)}</span>
-              <span class="muted small">${firstX ? xLabel(firstX, range) : ''} → ${lastX ? xLabel(lastX, range) : ''}</span></div>`
+        ${model && lastV != null
+          ? html`<div class="fv-fig"><span class="num">${effUnit === 'pct' ? pct(lastV) : money(lastV)}</span>
+              ${dv != null && effUnit === 'amt'
+                ? html`<span class=${`num small-fig ${tone(dv)}`}>${money(dv, { sign: true })}　${pct(model.base ? (dv / model.base) * 100 : null)}</span>`
+                : null}
+              <span class="muted small">较${model.range === '1d' ? '最新净值' : '区间起点'}</span></div>`
           : null}
       </div>
       <button class="icon-btn" onClick=${onClose} aria-label="关闭">×</button>
@@ -322,29 +390,31 @@ export function TrendView({ portfolio, group, onClose }) {
     <div class="fv-body">
       <div class="fv-controls">
         <${Seg} small options=${RANGES} value=${range} onChange=${set(setRange, 'range')} label="时间范围" />
-        <${Seg} small options=${MODES} value=${mode} onChange=${set(setMode, 'mode')} label="显示方式" />
-        <${Seg} small options=${UNITS} value=${unit} onChange=${set(setUnit, 'unit')} label="单位" />
+        <${Seg} small options=${MODES} value=${mode} onChange=${set(setMode, 'mode2')} label="显示方式" />
+        <${Seg} small options=${UNITS.map((u) => ({ ...u, disabled: stacked && u.value === 'pct', title: stacked && u.value === 'pct' ? '叠加图按金额显示' : '' }))}
+          value=${effUnit} onChange=${set(setUnit, 'unit')} label="单位" />
       </div>
       ${st.err ? html`<div class="callout warn">${st.err}</div>` : null}
       ${!model ? html`<div style=${{ height: chartH + 'px' }}><${Loading} text="读取走势" /></div>` : html`
-        <${TrendChart} model=${model} unit=${unit} mode=${model.perFund ? mode : 'total'} hidden=${hidden} kind=${range} height=${chartH} />
+        <${TrendChart} model=${model} unit=${effUnit} stacked=${!!showBands} kind=${range} height=${chartH} />
         ${model.note ? html`<p class="field-hint">${model.note}</p>` : null}
-        <div class="fv-legend">
-          <div class="lg-row lg-total"><span class="sw ink"></span><span class="lg-name">合计</span>
-            <span class=${`num ${tone(totalLast)}`}>${fmt(totalLast, unit)}</span></div>
-          ${mode === 'funds' && model.perFund
-            ? model.series.map((s) => {
-                const v = last(s.values);
-                return html`<button type="button" class=${`lg-row ${hidden.has(s.key) ? 'off' : ''}`} onClick=${() => toggle(s.key)}
-                  aria-pressed=${!hidden.has(s.key)} title=${hidden.has(s.key) ? '点击显示' : '点击隐藏'}>
-                  <span class=${`sw ${s.dashed ? 'dashed' : ''}`} style=${{ background: s.dashed ? 'none' : s.color, borderColor: s.color }}></span>
-                  <span class="lg-name">${s.name}${s.code ? html` <span class="muted num">${s.code}</span>` : null}</span>
-                  <span class=${`num ${tone(v)}`}>${fmt(v, unit)}</span>
-                </button>`;
-              })
-            : null}
-        </div>
-        ${mode === 'funds' && model.perFund ? html`<p class="field-hint">点图例可以隐藏或显示某只基金；合计线始终是所有基金之和。</p>` : null}
+        ${showBands
+          ? html`<div class="fv-legend">
+              <div class="lg-row lg-total"><span class="sw ink"></span><span class="lg-name">合计（最上沿）</span>
+                <span class="num">${money(lastV)}</span></div>
+              ${[...model.bands].reverse().map((b) => {
+                const vals = b.values.filter((v) => v != null);
+                const ch = vals.length ? vals[vals.length - 1] - vals[0] : null;
+                return html`<div class="lg-row">
+                  <span class="sw" style=${{ background: b.color }}></span>
+                  <span class="lg-name">${b.name}${b.code ? html` <span class="muted num">${b.code}</span>` : null}</span>
+                  <span class="lg-val"><span class="num">${money(vals[vals.length - 1])}</span>
+                    <span class=${`num small ${tone(ch)}`}>${money(ch, { sign: true })}</span></span>
+                </div>`;
+              })}
+            </div>
+            <p class="field-hint">每只基金的市值从下往上依次叠加，任一时刻最上沿的高度就是合计市值；图例右侧是区间内的金额变化。</p>`
+          : null}
       `}
     </div>
   </div>`;

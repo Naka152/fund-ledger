@@ -57,14 +57,31 @@ def record(uid, res, now):
             'g': {g['id']: [round(g['totals']['estValue'], 2), round(g['totals']['value'], 2)]
                   for g in res.get('groups', []) if g['count']},
             'c': codes,
+            # 每只持仓的 [估算市值, 估算持有收益, 较最新净值的估算盈亏]：全屏走势里画分基金折线用
+            # （用持有收益的变化而不是市值的变化，定投加仓不会造成跳变）
+            'hp': {r['id']: [round(r['estValue'], 2), round(r['estPnl'], 2), round(r.get('estDayPnl') or 0, 2)]
+                   for r in res['holdings'] if r.get('estValue') is not None and r.get('estPnl') is not None},
         })
         if not day['dirty']:
             day['dirty'] = time.time()
         _flush(uid)
 
 
-def series(uid, d=None):
-    d = d or session_day(now_cn())
+def series(uid, d=None, days=1):
+    """某个估值日的分钟记录；days>1 时把最近几个有记录的估值日拼起来。"""
+    today = session_day(now_cn())
+    if days > 1 and not d:
+        names = {f[:-5] for f in os.listdir(_dir(uid)) if f.endswith('.json')}
+        with _lock:
+            if uid in _days:
+                names.add(_days[uid]['date'])
+        keep = sorted(x for x in names if x <= today)[-days:]
+        pts = []
+        for x in keep:
+            pts += series(uid, x)['points']
+        pts.sort(key=lambda p: p['t'])
+        return {'date': today, 'days': keep, 'points': pts}
+    d = d or today
     with _lock:
         day = _days.get(uid)
         if day and day['date'] == d:

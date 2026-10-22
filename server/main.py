@@ -155,7 +155,13 @@ def api_portfolio(req, **_):
 
 @route('GET', '/api/intraday')
 def api_intraday(req, **_):
-    return recorder.series(req.uid, req.q('date'))
+    days = max(1, min(10, int(req.q('days') or 1)))
+    return recorder.series(req.uid, req.q('date'), days)
+
+
+@route('GET', '/api/trend')
+def api_trend(req, **_):
+    return portfolio.trend(req.uid, req.q('range') or '1m')
 
 
 @route('GET', '/api/state')

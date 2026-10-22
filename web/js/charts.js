@@ -5,7 +5,7 @@ import { Seg } from './ui.js';
 
 let uid = 0;
 
-function useWidth(initial = 600) {
+export function useWidth(initial = 600) {
   const ref = useRef();
   const [w, setW] = useState(initial);
   useEffect(() => {
@@ -26,14 +26,14 @@ function niceStep(span, n) {
   return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * p;
 }
 
-function ticks(lo, hi, n = 4) {
+export function ticks(lo, hi, n = 4) {
   const step = niceStep(hi - lo, n);
   const out = [];
   for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) out.push(+v.toFixed(10));
   return { out, step };
 }
 
-function decFor(step) {
+export function decFor(step) {
   return Math.min(4, Math.max(0, Math.ceil(-Math.log10(step) + 0.001)));
 }
 

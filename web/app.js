@@ -5,6 +5,7 @@ import { api } from './js/api.js';
 import { IntradayChart } from './js/charts.js';
 import { FavDetail, FundDetail } from './js/detail.js';
 import { FavEmpty, FavList, GroupBar, GroupManager } from './js/lists.js';
+import { TrendView } from './js/trend.js';
 import { estLabel, hms, kindTag, md, money, weekday, when, ymd } from './js/fmt.js';
 import { Drawer, InstrumentPicker, Loading, Num, Seg, Toaster, toast } from './js/ui.js';
 
@@ -131,7 +132,7 @@ function Masthead({ data, at, busy, err, reload, onSettings, user }) {
   </header>`;
 }
 
-function Summary({ t, intraday, group }) {
+function Summary({ t, intraday, group, onExpand }) {
   // 全部：组合总值；某个分组：该分组自己的估值（新记录里按分组存了 [估算值, 净值]）
   const pts = group ? (intraday || []).filter((p) => p.g?.[group.id]) : intraday;
   const first = pts && pts.length ? pts[0] : null;
@@ -158,8 +159,9 @@ function Summary({ t, intraday, group }) {
       <div class="fig-mid"><${Num} v=${t.pnl} sign color /></div>
       <div class="fig-sub"><${Num} v=${t.pnlPct} kind="pct" color /><span>估算</span><${Num} v=${t.estPnl} sign color /></div>
     </div>
-    <div class="fig fig-chart">
-      <div class="fig-label"><span>今日估值走势</span><span class="en">INTRADAY</span></div>
+    <div class="fig fig-chart expandable" role="button" tabindex="0" title="点击放大，查看更长时间的走势"
+      onClick=${onExpand} onKeyDown=${(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onExpand())}>
+      <div class="fig-label"><span>今日估值走势</span><span class="en">放大 ⤢</span></div>
       <${IntradayChart} points=${pts} value=${val} height=${96} />
     </div>
   </section>`;
@@ -425,7 +427,7 @@ function Main({ auth, user }) {
     ${!data
       ? html`<${Loading} text=${err || '正在读取持仓与行情'} />`
       : html`
-        <${Summary} t=${group ? group.totals : data.totals} intraday=${intraday} group=${group} />
+        <${Summary} t=${group ? group.totals : data.totals} intraday=${intraday} group=${group} onExpand=${() => route.open('#/trend')} />
         <${WatchStrip} watch=${data.watch} onEdit=${() => route.open('#/watch')} />
         <div class="sec-head">
           <div class="sec-tabs" role="tablist">
@@ -482,6 +484,7 @@ function Main({ auth, user }) {
         : html`<${Drawer} title="不在自选里" onClose=${route.close}><p class="note pad">它可能已经被移出自选了。</p></${Drawer}>`
       : null}
     ${route.name === 'groups' && data ? html`<${GroupManager} groups=${groups} onClose=${route.close} onSaved=${reload} />` : null}
+    ${route.name === 'trend' && data ? html`<${TrendView} portfolio=${data} group=${group} onClose=${route.close} />` : null}
     ${route.name === 'watch' && data ? html`<${WatchEditor} watch=${data.watch} onClose=${route.close} onSaved=${reload} />` : null}
     ${route.name === 'settings' ? html`<${Settings} auth=${auth} user=${user} onClose=${route.close} />` : null}
     <${Toaster} />

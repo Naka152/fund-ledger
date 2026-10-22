@@ -676,6 +676,49 @@ def _holding_row(h, meta, navs, qmap, now):
     return row
 
 
+TREND_RANGES = {'1m': 22, '3m': 66, '6m': 130, '1y': 250}
+
+
+def trend(uid, rng):
+    """较长时间的走势：每只持仓按当前份额回溯每日市值（用日涨幅连乘，分红不跳空），最后一个点是实时估算。"""
+    n = TREND_RANGES.get(rng, 22)
+    res = compute(uid)
+    rows = [r for r in res['holdings'] if r.get('value') is not None and r.get('shares')]
+    hist = {}
+    for r in rows:
+        navs = _safe(fundsrc.navs, r['code'], r.get('navDate')) or []
+        if navs and navs[-1][0] < r['navDate']:
+            navs = navs + [[r['navDate'], r['nav'], None, r.get('navPct')]]
+        if not navs:
+            continue
+        idx, acc = [], 1.0
+        for i, row in enumerate(navs):
+            if i:
+                acc *= 1 + row[3] / 100 if row[3] is not None else row[1] / navs[i - 1][1]
+            idx.append(acc)
+        last = r['shares'] * navs[-1][1]
+        hist[r['id']] = [(row[0], last * idx[i] / idx[-1]) for i, row in enumerate(navs)]
+    dates = sorted({d for h in hist.values() for d, _ in h[-(n + 1):]})[-(n + 1):]
+    live = any((r.get('est') or {}).get('live') for r in rows)
+    groups = {g['id']: g for g in res['groups']}
+    out = []
+    for r in rows:
+        h = hist.get(r['id'])
+        if not h:
+            continue
+        hd = [d for d, _ in h]
+        vals = []
+        for d in dates:  # 用当天或之前最近一个净值日的市值（QDII 净值晚一天、假期不同步）
+            i = bisect.bisect_right(hd, d)
+            vals.append(round(h[i - 1][1], 2) if i else None)
+        if live:
+            vals.append(round(r['estValue'], 2))
+        g = groups.get(r.get('group')) or {}
+        out.append({'id': r['id'], 'code': r['code'], 'name': r['name'], 'group': r.get('group'),
+                    'inTotal': g.get('inTotal', True), 'values': vals})
+    return {'range': rng, 'dates': dates, 'est': live, 'now': res['now'], 'holdings': out}
+
+
 def fund_detail(code, now=None):
     """添加/查看基金时用：资料、最新净值、近一年净值、估算预览与快照建议。"""
     now = now or now_cn()
